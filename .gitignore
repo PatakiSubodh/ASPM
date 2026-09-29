@@ -1,0 +1,23 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.env
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+frontend/ai-docs/
+
+# Claude / agent-generated docs (keep README.md as the required project doc)
+frontend/CLAUDE.md
+frontend/AGENTS.md
+
+# Neo4j / Docker
+neo4j_data/
+
+# OS / editor
+.DS_Store
+*.log
