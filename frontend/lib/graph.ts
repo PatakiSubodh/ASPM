@@ -19,6 +19,12 @@ export interface GraphData {
 
 export const INK = "#111111";
 
+export const PAPER = "#ffffff";
+
+export const ACID = "#c8ff2e";
+
+export const FADED = "rgba(17,17,17,0.1)";
+
 export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
 
 export type Severity = (typeof SEVERITIES)[number];
