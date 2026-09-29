@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase, Driver
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 load_dotenv()
 
@@ -35,6 +35,26 @@ def get_driver() -> Driver:
     if driver is None:
         raise HTTPException(status_code=503, detail="Neo4j driver not initialized")
     return driver
+
+
+# Uniqueness constraints on each node's natural key. These also create a
+# backing index, so MERGE lookups on these properties stay fast.
+CONSTRAINTS = [
+    "CREATE CONSTRAINT repository_name_unique IF NOT EXISTS "
+    "FOR (r:Repository) REQUIRE r.name IS UNIQUE",
+    "CREATE CONSTRAINT vulnerability_id_unique IF NOT EXISTS "
+    "FOR (v:Vulnerability) REQUIRE v.id IS UNIQUE",
+    "CREATE CONSTRAINT asset_name_unique IF NOT EXISTS "
+    "FOR (a:Asset) REQUIRE a.name IS UNIQUE",
+]
+
+
+def ensure_constraints(db: Driver) -> None:
+    """Idempotently create schema constraints. Fails startup if existing data
+    already violates one (duplicate nodes must be merged by hand first)."""
+    with db.session() as session:
+        for statement in CONSTRAINTS:
+            session.run(statement).consume()
 
 
 def seed_sample_data(db: Driver) -> None:
@@ -83,6 +103,7 @@ async def lifespan(app: FastAPI):
     global driver
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     driver.verify_connectivity()
+    ensure_constraints(driver)
     seed_sample_data(driver)
     yield
     driver.close()
@@ -102,11 +123,26 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+# Node keys are normalized before they reach Cypher so that trivial variations
+# ("Payments-Service ", "vuln-1001") MERGE onto the same node instead of
+# slipping past the uniqueness constraints as distinct values.
+
+def _normalize_key(value: str) -> str:
+    value = " ".join(value.split())
+    if not value:
+        raise ValueError("must not be blank")
+    return value
+
 
 class RepositoryIn(BaseModel):
     name: str
     url: str
     language: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
 
 
 class VulnerabilityIn(BaseModel):
@@ -116,12 +152,22 @@ class VulnerabilityIn(BaseModel):
     description: str
     status: str = "open"
 
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, v: str) -> str:
+        return _normalize_key(v).upper()
+
 
 class AssetIn(BaseModel):
     name: str
     environment: str
     type: str
     internet_facing: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
 
 
 class FindingIngest(BaseModel):
@@ -204,3 +250,35 @@ def list_findings():
             }
             for record in results
         ]
+
+
+@app.get("/graph")
+def get_graph():
+    """Return the whole graph as nodes + links for force-directed rendering.
+
+    Node ids are "<Label>:<key>" so they're stable and unique across labels.
+    """
+    query = """
+    MATCH (n)
+    WHERE n:Repository OR n:Vulnerability OR n:Asset
+    OPTIONAL MATCH (n)-[r:CONTAINS|AFFECTS]->(m)
+    RETURN n, labels(n)[0] AS label, type(r) AS rel, m, labels(m)[0] AS target_label
+    """
+    key_for = {"Repository": "name", "Vulnerability": "id", "Asset": "name"}
+
+    def node_id(label: str, props: dict) -> str:
+        return f"{label}:{props[key_for[label]]}"
+
+    nodes: dict[str, dict] = {}
+    links: list[dict] = []
+    db = get_driver()
+    with db.session() as session:
+        for record in session.run(query):
+            props = dict(record["n"])
+            source = node_id(record["label"], props)
+            nodes.setdefault(source, {"id": source, "label": record["label"], "properties": props})
+            if record["rel"] is not None:
+                target = node_id(record["target_label"], dict(record["m"]))
+                links.append({"source": source, "target": target, "type": record["rel"]})
+
+    return {"nodes": list(nodes.values()), "links": links}

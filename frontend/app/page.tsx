@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -72,14 +74,19 @@ export default async function Home() {
   return (
     <div className="min-h-screen bg-zinc-50 p-8 dark:bg-black">
       <div className="mx-auto max-w-5xl space-y-6">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            ASPM — Security Findings
-          </h1>
-          <p className="text-zinc-600 dark:text-zinc-400">
-            Repository → Vulnerability → Production Asset, sourced live from
-            the Neo4j graph.
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">
+              ASPM — Security Findings
+            </h1>
+            <p className="text-zinc-600 dark:text-zinc-400">
+              Repository → Vulnerability → Production Asset, sourced live from
+              the Neo4j graph.
+            </p>
+          </div>
+          <Link href="/graph" className="text-sm underline">
+            Graph view →
+          </Link>
         </div>
 
         {error && (
