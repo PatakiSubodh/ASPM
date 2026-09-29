@@ -17,17 +17,30 @@ export interface GraphData {
   links: GraphLink[];
 }
 
+export const INK = "#111111";
+
+export const SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW"] as const;
+
+export type Severity = (typeof SEVERITIES)[number];
+
 export const severityHex: Record<string, string> = {
-  CRITICAL: "#dc2626",
-  HIGH: "#f97316",
-  MEDIUM: "#eab308",
-  LOW: "#a1a1aa",
+  CRITICAL: "#ff4f2e",
+  HIGH: "#ff9a1f",
+  MEDIUM: "#ffd83d",
+  LOW: "#cfcbc0",
+};
+
+export const severityBg: Record<Severity, string> = {
+  CRITICAL: "bg-crit",
+  HIGH: "bg-high",
+  MEDIUM: "bg-medium",
+  LOW: "bg-low",
 };
 
 export const labelHex: Record<NodeLabel, string> = {
-  Repository: "#3b82f6",
-  Vulnerability: "#dc2626",
-  Asset: "#10b981",
+  Repository: "#6c8cff",
+  Vulnerability: "#ff4f2e",
+  Asset: "#c8ff2e",
 };
 
 export function nodeColor(node: GraphNode): string {

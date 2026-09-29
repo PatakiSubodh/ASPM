@@ -1,13 +1,8 @@
-import Link from "next/link";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 
+import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -16,6 +11,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SEVERITIES, type Severity, severityBg } from "@/lib/graph";
+import { cn } from "@/lib/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -28,7 +25,7 @@ interface Repository {
 interface Vulnerability {
   id: string;
   cve?: string;
-  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  severity: Severity;
   description: string;
   status: string;
 }
@@ -45,13 +42,6 @@ interface Finding {
   vulnerability: Vulnerability;
   asset: Asset;
 }
-
-const severityColor: Record<Vulnerability["severity"], string> = {
-  CRITICAL: "bg-red-600 text-white hover:bg-red-600",
-  HIGH: "bg-orange-500 text-white hover:bg-orange-500",
-  MEDIUM: "bg-yellow-500 text-black hover:bg-yellow-500",
-  LOW: "bg-zinc-400 text-white hover:bg-zinc-400",
-};
 
 async function getFindings(): Promise<Finding[]> {
   const res = await fetch(`${API_URL}/findings`, { cache: "no-store" });
@@ -71,112 +61,160 @@ export default async function Home() {
     error = e instanceof Error ? e.message : "Unknown error";
   }
 
+  findings.sort(
+    (a, b) =>
+      SEVERITIES.indexOf(a.vulnerability.severity) -
+      SEVERITIES.indexOf(b.vulnerability.severity),
+  );
+
+  const counts = Object.fromEntries(
+    SEVERITIES.map((s) => [
+      s,
+      findings.filter((f) => f.vulnerability.severity === s).length,
+    ]),
+  ) as Record<Severity, number>;
+
   return (
-    <div className="min-h-screen bg-zinc-50 p-8 dark:bg-black">
-      <div className="mx-auto max-w-5xl space-y-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold tracking-tight">
-              ASPM — Security Findings
-            </h1>
-            <p className="text-zinc-600 dark:text-zinc-400">
-              Repository → Vulnerability → Production Asset, sourced live from
-              the Neo4j graph.
-            </p>
-          </div>
-          <Link href="/graph" className="text-sm underline">
-            Graph view →
-          </Link>
-        </div>
+    <div className="space-y-12">
+      <section className="animate-rise space-y-4">
+        <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
+          01 / Findings
+        </p>
+        <h1 className="text-5xl font-bold leading-[0.9] tracking-tighter sm:text-7xl">
+          What&apos;s{" "}
+          <span className="inline-block -rotate-2 border-2 border-foreground bg-acid px-3 shadow-brutal">
+            exposed
+          </span>
+          .
+        </h1>
+        <p className="max-w-xl font-mono text-sm text-muted-foreground">
+          Repository → vulnerability → production asset. Live from Neo4j.
+        </p>
+      </section>
 
-        {error && (
-          <Card className="border-red-300">
-            <CardHeader>
-              <CardTitle className="text-red-600">
-                Could not reach the API
-              </CardTitle>
-              <CardDescription>
-                {error}. Make sure the FastAPI backend is running on{" "}
-                {API_URL} and Neo4j is up (<code>docker compose up -d</code>
-                ).
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
+      {error && (
+        <StateCard tone="error" title="API unreachable">
+          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
+          <code>docker compose up -d</code>.
+        </StateCard>
+      )}
 
-        {!error && findings.length === 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>No findings yet</CardTitle>
-              <CardDescription>
-                Ingest one via <code>POST /findings</code> to see it here.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
+      {!error && findings.length === 0 && (
+        <StateCard tone="empty" title="Nothing here yet">
+          Ingest one via <code>POST /findings</code> and it shows up here.
+        </StateCard>
+      )}
 
-        {!error && findings.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Attack Path Findings</CardTitle>
-              <CardDescription>
-                {findings.length} finding(s) mapped from code to production
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
+      {!error && findings.length > 0 && (
+        <>
+          <section className="grid grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-6">
+            {SEVERITIES.map((severity, i) => (
+              <Card
+                key={severity}
+                style={{ animationDelay: `${80 + i * 60}ms` }}
+                className={cn(
+                  "brutal brutal-lift animate-rise gap-1 px-5 py-4",
+                  counts[severity] > 0
+                    ? severityBg[severity]
+                    : "bg-card text-muted-foreground",
+                )}
+              >
+                <span className="text-5xl font-bold tabular-nums tracking-tighter">
+                  {String(counts[severity]).padStart(2, "0")}
+                </span>
+                <span className="font-mono text-[11px] font-bold uppercase tracking-widest">
+                  {severity}
+                </span>
+              </Card>
+            ))}
+          </section>
+
+          <Card
+            className="brutal animate-rise gap-0 bg-card py-0"
+            style={{ animationDelay: "360ms" }}
+          >
+            <CardContent className="px-0">
               <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Severity</TableHead>
-                    <TableHead>Vulnerability</TableHead>
-                    <TableHead>Repository</TableHead>
-                    <TableHead>Exposed Asset</TableHead>
-                    <TableHead>Environment</TableHead>
+                <TableHeader className="bg-foreground">
+                  <TableRow className="border-0 hover:bg-foreground">
+                    {["Sev", "Vulnerability", "Path", "Env", "Exposure"].map(
+                      (h) => (
+                        <TableHead
+                          key={h}
+                          className="h-11 px-4 font-mono text-[11px] font-bold uppercase tracking-widest text-background"
+                        >
+                          {h}
+                        </TableHead>
+                      ),
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {findings.map((f) => (
-                    <TableRow key={f.vulnerability.id}>
-                      <TableCell>
-                        <Badge className={severityColor[f.vulnerability.severity]}>
+                    <TableRow
+                      key={`${f.vulnerability.id}:${f.asset.name}`}
+                      className="border-b-2 border-foreground hover:bg-acid/25"
+                    >
+                      <TableCell className="px-4 py-5 align-top">
+                        <Badge
+                          className={cn(
+                            "h-6 border-2 border-foreground px-2 font-mono text-[11px] font-bold text-foreground shadow-brutal-sm",
+                            severityBg[f.vulnerability.severity],
+                          )}
+                        >
                           {f.vulnerability.severity}
                         </Badge>
                       </TableCell>
-                      <TableCell>
-                        <div className="font-medium">
+                      <TableCell className="min-w-64 max-w-md whitespace-normal px-4 py-5 align-top">
+                        <div className="font-mono font-bold">
                           {f.vulnerability.cve ?? f.vulnerability.id}
                         </div>
-                        <div className="text-sm text-zinc-500">
+                        <p className="mt-1 text-sm leading-snug text-muted-foreground">
                           {f.vulnerability.description}
+                        </p>
+                      </TableCell>
+                      <TableCell className="px-4 py-5 align-top">
+                        <div className="flex items-center gap-2 font-mono text-sm">
+                          <a
+                            href={f.repository.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="group inline-flex items-center gap-0.5 font-bold underline decoration-2 underline-offset-4 hover:bg-acid"
+                          >
+                            {f.repository.name}
+                            <ArrowUpRight className="size-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                          </a>
+                          <ArrowRight className="size-4 shrink-0" />
+                          <span>{f.asset.name}</span>
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <a
-                          href={f.repository.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline"
+                      <TableCell className="px-4 py-5 align-top">
+                        <Badge
+                          variant="outline"
+                          className="h-6 border-2 border-foreground bg-card px-2 font-mono text-[11px] lowercase"
                         >
-                          {f.repository.name}
-                        </a>
+                          {f.asset.environment}
+                        </Badge>
                       </TableCell>
-                      <TableCell>
-                        {f.asset.name}
-                        {f.asset.internet_facing && (
-                          <Badge variant="outline" className="ml-2">
-                            internet-facing
+                      <TableCell className="px-4 py-5 align-top">
+                        {f.asset.internet_facing ? (
+                          <Badge className="h-6 -rotate-3 border-2 border-foreground bg-foreground px-2 font-mono text-[11px] font-bold uppercase text-acid">
+                            ● Public
                           </Badge>
+                        ) : (
+                          <span className="font-mono text-[11px] uppercase text-muted-foreground">
+                            Internal
+                          </span>
                         )}
                       </TableCell>
-                      <TableCell>{f.asset.environment}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </CardContent>
           </Card>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1,13 +1,5 @@
-import Link from "next/link";
-
 import FindingsGraph from "@/components/graph-view";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { StateCard } from "@/components/state-card";
 import type { GraphData } from "@/lib/graph";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -31,64 +23,41 @@ export default async function GraphPage() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 p-8 dark:bg-black">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-semibold tracking-tight">
-              ASPM — Attack Path Graph
-            </h1>
-            <p className="text-zinc-600 dark:text-zinc-400">
-              Explore how vulnerable code reaches production assets.
-            </p>
-          </div>
-          <Link href="/" className="text-sm underline">
-            ← Table view
-          </Link>
+    <div className="space-y-10">
+      <section className="animate-rise flex flex-wrap items-end justify-between gap-6">
+        <div className="space-y-4">
+          <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            02 / Graph
+          </p>
+          <h1 className="text-5xl font-bold leading-[0.9] tracking-tighter sm:text-7xl">
+            Follow the{" "}
+            <span className="inline-block rotate-1 border-2 border-foreground bg-acid px-3 shadow-brutal">
+              path
+            </span>
+            .
+          </h1>
         </div>
-
-        {error && (
-          <Card className="border-red-300">
-            <CardHeader>
-              <CardTitle className="text-red-600">
-                Could not reach the API
-              </CardTitle>
-              <CardDescription>
-                {error}. Make sure the FastAPI backend is running on{" "}
-                {API_URL} and Neo4j is up (<code>docker compose up -d</code>
-                ).
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-
-        {graph && graph.nodes.length === 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Graph is empty</CardTitle>
-              <CardDescription>
-                Ingest a finding via <code>POST /findings</code> to see it here.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        )}
-
         {graph && graph.nodes.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Graph</CardTitle>
-              <CardDescription>
-                {graph.nodes.length} node(s), {graph.links.length}{" "}
-                relationship(s). Drag to pan, scroll to zoom, click a node for
-                details.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FindingsGraph data={graph} />
-            </CardContent>
-          </Card>
+          <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+            {graph.nodes.length} nodes · {graph.links.length} edges
+          </p>
         )}
-      </div>
+      </section>
+
+      {error && (
+        <StateCard tone="error" title="API unreachable">
+          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
+          <code>docker compose up -d</code>.
+        </StateCard>
+      )}
+
+      {graph && graph.nodes.length === 0 && (
+        <StateCard tone="empty" title="Graph is empty">
+          Ingest one via <code>POST /findings</code> and it shows up here.
+        </StateCard>
+      )}
+
+      {graph && graph.nodes.length > 0 && <FindingsGraph data={graph} />}
     </div>
   );
 }
