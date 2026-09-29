@@ -37,8 +37,6 @@ def get_driver() -> Driver:
     return driver
 
 
-# Uniqueness constraints on each node's natural key. These also create a
-# backing index, so MERGE lookups on these properties stay fast.
 CONSTRAINTS = [
     "CREATE CONSTRAINT repository_name_unique IF NOT EXISTS "
     "FOR (r:Repository) REQUIRE r.name IS UNIQUE",
@@ -50,8 +48,6 @@ CONSTRAINTS = [
 
 
 def ensure_constraints(db: Driver) -> None:
-    """Idempotently create schema constraints. Fails startup if existing data
-    already violates one (duplicate nodes must be merged by hand first)."""
     with db.session() as session:
         for statement in CONSTRAINTS:
             session.run(statement).consume()
@@ -123,10 +119,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
-# Node keys are normalized before they reach Cypher so that trivial variations
-# ("Payments-Service ", "vuln-1001") MERGE onto the same node instead of
-# slipping past the uniqueness constraints as distinct values.
-
 def _normalize_key(value: str) -> str:
     value = " ".join(value.split())
     if not value:
@@ -254,10 +246,6 @@ def list_findings():
 
 @app.get("/graph")
 def get_graph():
-    """Return the whole graph as nodes + links for force-directed rendering.
-
-    Node ids are "<Label>:<key>" so they're stable and unique across labels.
-    """
     query = """
     MATCH (n)
     WHERE n:Repository OR n:Vulnerability OR n:Asset

@@ -25,7 +25,6 @@ const NODE_RADIUS: Record<GraphNode["label"], number> = {
 
 type Node = NodeObject<GraphNode>;
 
-// After the simulation runs, link ends are replaced by node objects.
 function endId(end: unknown): string {
   return typeof end === "object" && end !== null
     ? String((end as Node).id)
@@ -39,7 +38,6 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
   const [textColor, setTextColor] = useState("#18181b");
   const [selected, setSelected] = useState<GraphNode | null>(null);
 
-  // The canvas needs explicit pixel dimensions; track the container width.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -51,7 +49,6 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
     return () => observer.disconnect();
   }, []);
 
-  // force-graph mutates node/link objects in place, so hand it copies.
   const graphData = useMemo(
     () => ({
       nodes: data.nodes.map((n) => ({ ...n })),
@@ -60,7 +57,6 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
     [data],
   );
 
-  // Highlight the selected node and its direct neighbours.
   const neighbours = useMemo(() => {
     if (!selected) return null;
     const ids = new Set([selected.id]);
@@ -107,7 +103,6 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
               const dimmed = neighbours !== null && !neighbours.has(n.id);
               ctx.globalAlpha = dimmed ? 0.15 : 1;
 
-              // Shape encodes node type: square repo, diamond vuln, circle asset.
               ctx.beginPath();
               if (n.label === "Repository") {
                 ctx.rect(x - r, y - r, r * 2, r * 2);
