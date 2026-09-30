@@ -138,6 +138,10 @@
   * {
     @apply border-border outline-ring/50;
   }
+  ::selection {
+    background-color: var(--acid);
+    color: var(--foreground);
+  }
   body {
     @apply bg-background text-foreground;
     background-image: radial-gradient(
