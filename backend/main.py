@@ -11,7 +11,9 @@ exposed by which vulnerable code, and where did that vulnerability come from?"
 import os
 import secrets
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from datetime import datetime, timezone
+from typing import Annotated, Literal, Optional
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Security
@@ -47,6 +49,8 @@ CONSTRAINTS = [
     "FOR (v:Vulnerability) REQUIRE v.id IS UNIQUE",
     "CREATE CONSTRAINT asset_name_unique IF NOT EXISTS "
     "FOR (a:Asset) REQUIRE a.name IS UNIQUE",
+    "CREATE CONSTRAINT scan_id_unique IF NOT EXISTS "
+    "FOR (s:Scan) REQUIRE s.id IS UNIQUE",
 ]
 
 
@@ -54,47 +58,6 @@ def ensure_constraints(db: Driver) -> None:
     with db.session() as session:
         for statement in CONSTRAINTS:
             session.run(statement).consume()
-
-
-def seed_sample_data(db: Driver) -> None:
-    """Idempotently create a dummy repo -> vulnerability -> asset chain so the
-    UI has real graph data to render immediately."""
-    query = """
-    MERGE (repo:Repository {name: $repo_name})
-      ON CREATE SET repo.url = $repo_url, repo.language = $repo_language
-
-    MERGE (vuln:Vulnerability {id: $vuln_id})
-      ON CREATE SET
-        vuln.cve = $vuln_cve,
-        vuln.severity = $vuln_severity,
-        vuln.description = $vuln_description,
-        vuln.status = $vuln_status
-
-    MERGE (asset:Asset {name: $asset_name})
-      ON CREATE SET
-        asset.environment = $asset_environment,
-        asset.type = $asset_type,
-        asset.internet_facing = $asset_internet_facing
-
-    MERGE (repo)-[:CONTAINS]->(vuln)
-    MERGE (vuln)-[:AFFECTS]->(asset)
-    """
-    with db.session() as session:
-        session.run(
-            query,
-            repo_name="payments-service",
-            repo_url="https://github.com/example-org/payments-service",
-            repo_language="Python",
-            vuln_id="VULN-1001",
-            vuln_cve="CVE-2024-12345",
-            vuln_severity="CRITICAL",
-            vuln_description="SQL Injection in the /invoices search endpoint due to unsanitized query parameter concatenation.",
-            vuln_status="open",
-            asset_name="prod-payments-api",
-            asset_environment="production",
-            asset_type="Kubernetes Service",
-            asset_internet_facing=True,
-        )
 
 
 @asynccontextmanager
@@ -105,7 +68,6 @@ async def lifespan(app: FastAPI):
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     driver.verify_connectivity()
     ensure_constraints(driver)
-    seed_sample_data(driver)
     yield
     driver.close()
 
@@ -157,7 +119,6 @@ class VulnerabilityIn(BaseModel):
     cve: Optional[str] = None
     severity: str = Field(pattern="^(LOW|MEDIUM|HIGH|CRITICAL)$")
     description: str
-    status: str = "open"
 
     @field_validator("id")
     @classmethod
@@ -210,11 +171,36 @@ class TrivyIngestParams(BaseModel):
     asset_environment: str
     asset_type: str
     asset_internet_facing: bool = False
+    commit: Optional[str] = None
+    partial: bool = False
 
     @field_validator("repo_name", "asset_name")
     @classmethod
     def normalize_name(cls, v: str) -> str:
         return _normalize_key(v).lower()
+
+
+FindingStatus = Literal["open", "in_progress", "resolved", "accepted_risk", "false_positive"]
+STATUSES: tuple[str, ...] = FindingStatus.__args__
+ACTIVE_STATUSES = ["open", "in_progress"]
+
+
+class StatusUpdate(BaseModel):
+    status: FindingStatus
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_statuses(status: str) -> Optional[list[str]]:
+    if status.strip().lower() == "all":
+        return None
+    statuses = [s.strip().lower() for s in status.split(",") if s.strip()]
+    invalid = [s for s in statuses if s not in STATUSES]
+    if invalid or not statuses:
+        raise HTTPException(status_code=422, detail=f"Invalid status filter: {status}")
+    return statuses
 
 
 # ---------------------------------------------------------------------------
@@ -226,57 +212,196 @@ def health():
     return {"status": "ok"}
 
 
+INGEST_BATCH_QUERY = """
+MERGE (repo:Repository {name: $repo.name})
+  ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
+MERGE (asset:Asset {name: $asset.name})
+  ON CREATE SET
+    asset.environment = $asset.environment,
+    asset.type = $asset.type,
+    asset.internet_facing = $asset.internet_facing
+WITH repo, asset
+UNWIND $findings AS f
+MERGE (vuln:Vulnerability {id: f.id})
+  ON CREATE SET vuln.status = 'open', vuln.first_seen = $now
+WITH repo, asset, f, vuln, vuln.status = 'resolved' AS reopened
+SET vuln.cve = f.cve,
+    vuln.severity = f.severity,
+    vuln.description = f.description,
+    vuln.package = f.package,
+    vuln.installed_version = f.installed_version,
+    vuln.fixed_version = f.fixed_version,
+    vuln.location = f.location,
+    vuln.scanner = $scanner,
+    vuln.type = $type,
+    vuln.last_seen = $now,
+    vuln.last_scan_id = $scan_id,
+    vuln.status = CASE WHEN reopened THEN 'open' ELSE vuln.status END,
+    vuln.reopened_at = CASE WHEN reopened THEN $now ELSE vuln.reopened_at END,
+    vuln.resolved_at = CASE WHEN reopened THEN null ELSE vuln.resolved_at END
+MERGE (repo)-[:CONTAINS]->(vuln)
+MERGE (vuln)-[:AFFECTS]->(asset)
+RETURN count(vuln) AS ingested, sum(CASE WHEN reopened THEN 1 ELSE 0 END) AS reopened
+"""
+
+AUTO_RESOLVE_QUERY = """
+MATCH (:Repository {name: $repo})-[:CONTAINS]->(v:Vulnerability {scanner: $scanner})
+WHERE v.status IN ['open', 'in_progress'] AND v.last_scan_id <> $scan_id
+SET v.status = 'resolved', v.resolved_at = $now
+RETURN count(v) AS resolved
+"""
+
+
+def ingest_batch(
+    tx,
+    repo: RepositoryIn,
+    asset: AssetIn,
+    scanner: str,
+    scan_id: Optional[str],
+    findings: list[dict],
+    now: str,
+    type: Optional[str] = None,
+) -> dict:
+    record = tx.run(
+        INGEST_BATCH_QUERY,
+        repo=repo.model_dump(),
+        asset=asset.model_dump(),
+        scanner=scanner,
+        scan_id=scan_id,
+        type=type,
+        findings=findings,
+        now=now,
+    ).single()
+    return {"ingested": record["ingested"], "reopened": record["reopened"]}
+
+
+def run_scan(
+    repo: RepositoryIn,
+    asset: AssetIn,
+    scanner: str,
+    type: str,
+    findings: list[dict],
+    commit: Optional[str],
+    partial: bool,
+    skipped: int,
+) -> dict:
+    scan_id = uuid4().hex
+    started_at = _now()
+
+    def work(tx) -> dict:
+        tx.run(
+            """
+            MERGE (repo:Repository {name: $repo.name})
+              ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
+            CREATE (s:Scan {id: $scan_id, scanner: $scanner, started_at: $now,
+                            commit: $commit, partial: $partial})
+            MERGE (s)-[:SCANNED]->(repo)
+            """,
+            repo=repo.model_dump(),
+            scan_id=scan_id,
+            scanner=scanner,
+            now=started_at,
+            commit=commit,
+            partial=partial,
+        ).consume()
+        counts = ingest_batch(tx, repo, asset, scanner, scan_id, findings, started_at, type)
+        resolved = 0
+        if not partial:
+            resolved = tx.run(
+                AUTO_RESOLVE_QUERY,
+                repo=repo.name,
+                scanner=scanner,
+                scan_id=scan_id,
+                now=started_at,
+            ).single()["resolved"]
+        finished_at = _now()
+        tx.run(
+            """
+            MATCH (s:Scan {id: $scan_id})-[:SCANNED]->(repo:Repository)
+            SET s.finished_at = $now,
+                s.ingested = $ingested,
+                s.resolved = $resolved,
+                s.reopened = $reopened,
+                s.skipped = $skipped,
+                repo.last_scanned_at = $now
+            """,
+            scan_id=scan_id,
+            now=finished_at,
+            ingested=counts["ingested"],
+            resolved=resolved,
+            reopened=counts["reopened"],
+            skipped=skipped,
+        ).consume()
+        return {"scan_id": scan_id, **counts, "resolved": resolved, "skipped": skipped}
+
+    with get_driver().session() as session:
+        return session.execute_write(work)
+
+
 @app.post("/findings", status_code=201, dependencies=protected)
 def ingest_finding(finding: FindingIngest):
-    """Ingest a security finding: links a repository to a vulnerability to
-    the production asset it exposes, merging into the existing graph."""
+    vuln = finding.vulnerability
+    with get_driver().session() as session:
+        session.execute_write(
+            ingest_batch,
+            finding.repository,
+            finding.asset,
+            "manual",
+            None,
+            [
+                {
+                    "id": vuln.id,
+                    "cve": vuln.cve,
+                    "severity": vuln.severity,
+                    "description": vuln.description,
+                }
+            ],
+            _now(),
+        )
+    return {
+        "created": {
+            "repository": finding.repository.name,
+            "vulnerability": vuln.id,
+            "asset": finding.asset.name,
+        }
+    }
+
+
+@app.patch("/findings/{finding_id}", dependencies=protected)
+def update_finding_status(finding_id: str, update: StatusUpdate):
     query = """
-    MERGE (repo:Repository {name: $repo_name})
-      ON CREATE SET repo.url = $repo_url, repo.language = $repo_language
-
-    MERGE (vuln:Vulnerability {id: $vuln_id})
-      SET
-        vuln.cve = $vuln_cve,
-        vuln.severity = $vuln_severity,
-        vuln.description = $vuln_description,
-        vuln.status = $vuln_status
-
-    MERGE (asset:Asset {name: $asset_name})
-      ON CREATE SET
-        asset.environment = $asset_environment,
-        asset.type = $asset_type,
-        asset.internet_facing = $asset_internet_facing
-
-    MERGE (repo)-[:CONTAINS]->(vuln)
-    MERGE (vuln)-[:AFFECTS]->(asset)
-    RETURN repo.name AS repository, vuln.id AS vulnerability, asset.name AS asset
+    MATCH (vuln:Vulnerability {id: $id})
+    WITH vuln, vuln.status = $status AS unchanged
+    SET vuln.status = $status,
+        vuln.status_changed_at = CASE WHEN unchanged THEN vuln.status_changed_at ELSE $now END,
+        vuln.resolved_at = CASE
+          WHEN $status <> 'resolved' THEN null
+          WHEN unchanged THEN vuln.resolved_at
+          ELSE $now
+        END
+    RETURN vuln { .* } AS vulnerability
     """
-    db = get_driver()
-    with db.session() as session:
-        record = session.run(
-            query,
-            repo_name=finding.repository.name,
-            repo_url=finding.repository.url,
-            repo_language=finding.repository.language,
-            vuln_id=finding.vulnerability.id,
-            vuln_cve=finding.vulnerability.cve,
-            vuln_severity=finding.vulnerability.severity,
-            vuln_description=finding.vulnerability.description,
-            vuln_status=finding.vulnerability.status,
-            asset_name=finding.asset.name,
-            asset_environment=finding.asset.environment,
-            asset_type=finding.asset.type,
-            asset_internet_facing=finding.asset.internet_facing,
-        ).single()
-
-    return {"created": dict(record)}
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(
+                query,
+                id=" ".join(finding_id.split()).upper(),
+                status=update.status,
+                now=_now(),
+            ).single()
+        )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    return {"vulnerability": record["vulnerability"]}
 
 
 @app.get("/findings", dependencies=protected)
-def list_findings():
+def list_findings(status: str = ",".join(ACTIVE_STATUSES)):
     """Return every repository -> vulnerability -> asset chain in the graph."""
     query = """
-    MATCH (repo:Repository)-[:CONTAINS]->(vuln:Vulnerability)-[:AFFECTS]->(asset:Asset)
+    MATCH (repo:Repository)-[:CONTAINS]->(vuln:Vulnerability)
+    WHERE $statuses IS NULL OR vuln.status IN $statuses
+    OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
     RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
     """
     db = get_driver()
@@ -286,9 +411,9 @@ def list_findings():
                 "repository": record["repository"],
                 "vulnerability": record["vulnerability"],
                 "asset": record["asset"],
-                "risk": asset_risk(record["vulnerability"]["severity"], record["asset"]),
+                "risk": asset_risk(record["vulnerability"]["severity"], record["asset"] or {}),
             }
-            for record in session.run(query)
+            for record in session.run(query, statuses=_parse_statuses(status))
         ]
     return sorted(findings, key=lambda f: f["risk"]["score"], reverse=True)
 
@@ -368,7 +493,7 @@ def list_assets():
     query = """
     MATCH (asset:Asset)
     OPTIONAL MATCH (vuln:Vulnerability)-[:AFFECTS]->(asset)
-    WHERE vuln.status = 'open'
+    WHERE vuln.status IN $statuses
     RETURN asset { .* } AS asset, collect(vuln.severity) AS severities
     ORDER BY asset.name
     """
@@ -385,16 +510,18 @@ def list_assets():
                     default=None,
                 ),
             }
-            for record in session.run(query)
+            for record in session.run(query, statuses=ACTIVE_STATUSES)
         ]
 
 
 @app.get("/graph", dependencies=protected)
-def get_graph():
+def get_graph(status: str = ",".join(ACTIVE_STATUSES)):
     query = """
     MATCH (n)
-    WHERE n:Repository OR n:Vulnerability OR n:Asset
+    WHERE n:Repository OR n:Asset
+       OR (n:Vulnerability AND ($statuses IS NULL OR n.status IN $statuses))
     OPTIONAL MATCH (n)-[r:CONTAINS|AFFECTS]->(m)
+    WHERE NOT m:Vulnerability OR $statuses IS NULL OR m.status IN $statuses
     RETURN n, labels(n)[0] AS label, type(r) AS rel, m, labels(m)[0] AS target_label
     """
     key_for = {"Repository": "name", "Vulnerability": "id", "Asset": "name"}
@@ -406,7 +533,7 @@ def get_graph():
     links: list[dict] = []
     db = get_driver()
     with db.session() as session:
-        for record in session.run(query):
+        for record in session.run(query, statuses=_parse_statuses(status)):
             props = dict(record["n"])
             source = node_id(record["label"], props)
             nodes.setdefault(source, {"id": source, "label": record["label"], "properties": props})
@@ -415,6 +542,26 @@ def get_graph():
                 links.append({"source": source, "target": target, "type": record["rel"]})
 
     return {"nodes": list(nodes.values()), "links": links}
+
+
+@app.get("/scans", dependencies=protected)
+def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
+    query = """
+    MATCH (s:Scan)-[:SCANNED]->(repo:Repository)
+    WHERE $repo IS NULL OR repo.name = $repo
+    RETURN s { .*, repository: repo.name } AS scan
+    ORDER BY s.started_at DESC
+    LIMIT $limit
+    """
+    with get_driver().session() as session:
+        return [
+            record["scan"]
+            for record in session.run(
+                query,
+                repo=_normalize_key(repo).lower() if repo and repo.strip() else None,
+                limit=limit,
+            )
+        ]
 
 
 def _trivy_description(vuln: TrivyVulnerability, target: str) -> str:
@@ -435,26 +582,33 @@ def ingest_trivy(report: TrivyReport, params: Annotated[TrivyIngestParams, Query
         internet_facing=params.asset_internet_facing,
     )
 
-    findings: dict[str, FindingIngest] = {}
+    findings: dict[str, dict] = {}
     skipped = 0
     for result in report.Results or []:
         for vuln in result.Vulnerabilities or []:
             if vuln.Severity not in SEVERITIES:
                 skipped += 1
                 continue
-            finding = FindingIngest(
-                repository=repository,
-                vulnerability=VulnerabilityIn(
-                    id=f"{repository.name}:{vuln.PkgName}:{vuln.VulnerabilityID}",
-                    cve=vuln.VulnerabilityID if vuln.VulnerabilityID.upper().startswith("CVE-") else None,
-                    severity=vuln.Severity,
-                    description=_trivy_description(vuln, result.Target),
-                ),
-                asset=asset,
-            )
-            findings[finding.vulnerability.id] = finding
+            vuln_id = _normalize_key(f"{repository.name}:{vuln.PkgName}:{vuln.VulnerabilityID}").upper()
+            findings[vuln_id] = {
+                "id": vuln_id,
+                "cve": vuln.VulnerabilityID if vuln.VulnerabilityID.upper().startswith("CVE-") else None,
+                "severity": vuln.Severity,
+                "description": _trivy_description(vuln, result.Target),
+                "package": vuln.PkgName,
+                "installed_version": vuln.InstalledVersion,
+                "fixed_version": vuln.FixedVersion,
+                "location": result.Target,
+            }
 
-    for finding in findings.values():
-        ingest_finding(finding)
-
-    return {"ingested": len(findings), "skipped": skipped, "ids": list(findings)}
+    result = run_scan(
+        repository,
+        asset,
+        "trivy",
+        "sca",
+        list(findings.values()),
+        params.commit,
+        params.partial,
+        skipped,
+    )
+    return {**result, "ids": list(findings)}

@@ -73,7 +73,7 @@ docker compose up -d --build
 | http://localhost:8000/docs | API docs (Swagger); click **Authorize** and paste the key |
 | http://localhost:7474 | Neo4j browser (`neo4j` / `aspm_dev_password`) |
 
-Startup order is enforced by health checks: `neo4j` → `api` → `web`. On first start the API creates the constraints and seeds one sample finding.
+Startup order is enforced by health checks: `neo4j` → `api` → `web`. On first start the API creates the constraints; the graph starts empty. To load sample data, see [`demo/README.md`](demo/README.md) (`docker compose --profile demo up -d`).
 
 Stop with `docker compose down` (add `-v` to also delete the graph data).
 
@@ -131,6 +131,8 @@ curl -X POST "http://localhost:8000/ingest/trivy?repo_name=my-repo&repo_url=http
   -H "X-API-Key: <key>" -H "Content-Type: application/json" --data-binary @trivy.json
 ```
 
+Each Trivy post is one scan run. New findings start `open`; findings the run no longer reports (same repo and scanner) become `resolved`; a `resolved` finding that comes back is reopened. Statuses set by people (`in_progress`, `accepted_risk`, `false_positive`) are kept. Add `&commit=<sha>` to record the commit, and `&partial=true` for scans of part of a repo so nothing is auto-resolved. The response is `{scan_id, ingested, resolved, reopened, skipped, ids}`.
+
 ## API
 
 All routes except `/health` require `X-API-Key`.
@@ -138,27 +140,31 @@ All routes except `/health` require `X-API-Key`.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Liveness |
-| `POST` | `/findings` | Ingest one repository → vulnerability → asset chain |
-| `GET` | `/findings` | All findings with risk, sorted by risk |
+| `POST` | `/findings` | Ingest one repository → vulnerability → asset chain (`scanner = manual`) |
+| `GET` | `/findings` | Findings with risk, sorted by risk; `?status=` (default `open,in_progress`, `all` for everything); includes findings with no asset |
 | `GET` | `/findings/{id}` | One vulnerability with its repositories, assets and per-asset risk |
-| `GET` | `/assets` | Assets with open-vulnerability counts per severity and worst risk |
-| `GET` | `/graph` | Whole graph as `{nodes, links}` |
-| `POST` | `/ingest/trivy` | Ingest a Trivy JSON report |
+| `PATCH` | `/findings/{id}` | Set status: `open`, `in_progress`, `resolved`, `accepted_risk`, `false_positive` |
+| `GET` | `/assets` | Assets with open / in-progress vulnerability counts per severity and worst risk |
+| `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings` |
+| `GET` | `/scans` | Scan runs, newest first; `?repo=`, `?limit=` |
+| `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=` |
 
 ## UI
 
 | Page | What it shows |
 |---|---|
-| `/` | Findings table ranked by risk, severity summary tiles |
+| `/` | Findings table ranked by risk, severity summary tiles, status filter, first / last seen |
 | `/graph` | Interactive force-directed graph of the whole attack-path graph |
-| `/findings/[id]` | Finding detail: description, risk, NVD link, repo → vuln → asset path |
+| `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
 | `/assets` | Asset inventory ranked by risk |
+| `/scans` | Scan history with ingested / resolved / reopened counts |
 
 ## Project layout
 
 ```
-docker-compose.yml     neo4j + api + web
+docker-compose.yml     neo4j + api + web (+ demo-seed under the demo profile)
 .env.example           compose configuration
+demo/                  opt-in sample data: seed.cypher, purge.cypher, trivy-sample.json
 backend/
   main.py              FastAPI app: models, auth, routes, risk scoring, Trivy connector
   Dockerfile

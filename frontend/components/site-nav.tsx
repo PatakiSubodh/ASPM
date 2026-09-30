@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/", label: "Findings" },
   { href: "/graph", label: "Graph" },
   { href: "/assets", label: "Assets" },
+  { href: "/scans", label: "Scans" },
 ];
 
 export function SiteNav() {

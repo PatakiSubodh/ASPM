@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { RiskBadge } from "@/components/risk-badge";
 import { StateCard } from "@/components/state-card";
+import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -14,14 +15,23 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiHeaders } from "@/lib/api";
-import { type Finding, findingHref } from "@/lib/findings";
+import { type Finding, findingHref, relativeTime } from "@/lib/findings";
 import { SEVERITIES, type Severity, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-async function getFindings(): Promise<Finding[]> {
-  const res = await fetch(`${API_URL}/findings`, {
+const FILTERS = [
+  { value: "active", label: "Active" },
+  { value: "open", label: "Open" },
+  { value: "in_progress", label: "In progress" },
+  { value: "resolved", label: "Resolved" },
+  { value: "all", label: "All" },
+];
+
+async function getFindings(status: string): Promise<Finding[]> {
+  const query = status === "active" ? "" : `?status=${encodeURIComponent(status)}`;
+  const res = await fetch(`${API_URL}/findings${query}`, {
     cache: "no-store",
     headers: apiHeaders(),
   });
@@ -31,12 +41,15 @@ async function getFindings(): Promise<Finding[]> {
   return res.json();
 }
 
-export default async function Home() {
+export default async function Home({ searchParams }: PageProps<"/">) {
+  const { status: rawStatus } = await searchParams;
+  const status =
+    FILTERS.find((f) => f.value === rawStatus)?.value ?? FILTERS[0].value;
   let findings: Finding[] = [];
   let error: string | null = null;
 
   try {
-    findings = await getFindings();
+    findings = await getFindings(status);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
@@ -80,9 +93,28 @@ export default async function Home() {
         </StateCard>
       )}
 
+      {!error && (
+        <nav className="animate-rise flex flex-wrap gap-3">
+          {FILTERS.map(({ value, label }) => (
+            <Link
+              key={value}
+              href={value === "active" ? "/" : `/?status=${value}`}
+              aria-current={value === status ? "page" : undefined}
+              className={cn(
+                "brutal-lift border-2 border-foreground px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm",
+                value === status ? "bg-acid" : "bg-card",
+              )}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+      )}
+
       {!error && findings.length === 0 && (
         <StateCard tone="empty" title="Nothing here yet">
-          Ingest one via <code>POST /findings</code> and it shows up here.
+          No findings match this filter. Ingest one via <code>POST /findings</code>{" "}
+          or <code>POST /ingest/trivy</code> and it shows up here.
         </StateCard>
       )}
 
@@ -118,7 +150,7 @@ export default async function Home() {
               <Table>
                 <TableHeader className="bg-foreground">
                   <TableRow className="border-0 hover:bg-foreground">
-                    {["Risk", "Sev", "Vulnerability", "Path", "Env", "Exposure"].map(
+                    {["Risk", "Sev", "Status", "Vulnerability", "Path", "Env", "Exposure", "Seen"].map(
                       (h) => (
                         <TableHead
                           key={h}
@@ -133,7 +165,7 @@ export default async function Home() {
                 <TableBody>
                   {findings.map((f) => (
                     <TableRow
-                      key={`${f.vulnerability.id}:${f.asset.name}`}
+                      key={`${f.vulnerability.id}:${f.asset?.name ?? ""}`}
                       className="border-b-2 border-foreground hover:bg-acid/25"
                     >
                       <TableCell className="px-4 py-5 align-top">
@@ -148,6 +180,9 @@ export default async function Home() {
                         >
                           {f.vulnerability.severity}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="px-4 py-5 align-top">
+                        <StatusBadge status={f.vulnerability.status} />
                       </TableCell>
                       <TableCell className="min-w-64 max-w-md whitespace-normal px-4 py-5 align-top">
                         <Link
@@ -172,19 +207,31 @@ export default async function Home() {
                             <ArrowUpRight className="size-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                           </a>
                           <ArrowRight className="size-4 shrink-0" />
-                          <span>{f.asset.name}</span>
+                          {f.asset ? (
+                            <span>{f.asset.name}</span>
+                          ) : (
+                            <span className="text-[11px] uppercase text-muted-foreground">
+                              No asset
+                            </span>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="px-4 py-5 align-top">
-                        <Badge
-                          variant="outline"
-                          className="h-6 border-2 border-foreground bg-card px-2 font-mono text-[11px] lowercase"
-                        >
-                          {f.asset.environment}
-                        </Badge>
+                        {f.asset ? (
+                          <Badge
+                            variant="outline"
+                            className="h-6 border-2 border-foreground bg-card px-2 font-mono text-[11px] lowercase"
+                          >
+                            {f.asset.environment}
+                          </Badge>
+                        ) : (
+                          <span className="font-mono text-[11px] uppercase text-muted-foreground">
+                            —
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="px-4 py-5 align-top">
-                        {f.asset.internet_facing ? (
+                        {f.asset?.internet_facing ? (
                           <Badge className="h-6 -rotate-3 border-2 border-foreground bg-foreground px-2 font-mono text-[11px] font-bold uppercase text-acid">
                             ● Public
                           </Badge>
@@ -193,6 +240,17 @@ export default async function Home() {
                             Internal
                           </span>
                         )}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap px-4 py-5 align-top font-mono text-[11px] uppercase">
+                        <div title={f.vulnerability.last_seen}>
+                          {relativeTime(f.vulnerability.last_seen)}
+                        </div>
+                        <div
+                          title={f.vulnerability.first_seen}
+                          className="mt-1 text-muted-foreground"
+                        >
+                          first {relativeTime(f.vulnerability.first_seen)}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

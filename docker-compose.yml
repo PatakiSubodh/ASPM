@@ -58,6 +58,17 @@ services:
       api:
         condition: service_healthy
 
+  demo-seed:
+    image: neo4j:5.24-community
+    profiles: ["demo"]
+    restart: "no"
+    volumes:
+      - ./demo:/demo:ro
+    entrypoint: ["cypher-shell", "-a", "bolt://neo4j:7687", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-aspm_dev_password}", "-f", "/demo/seed.cypher"]
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
 volumes:
   neo4j_data:
   neo4j_logs:

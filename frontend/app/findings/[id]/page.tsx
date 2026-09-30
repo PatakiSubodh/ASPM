@@ -3,12 +3,25 @@ import type { ReactNode } from "react";
 
 import { RiskBadge } from "@/components/risk-badge";
 import { StateCard } from "@/components/state-card";
+import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiHeaders } from "@/lib/api";
-import type { Asset, FindingDetail, Repository, Risk } from "@/lib/findings";
+import {
+  type Asset,
+  type FindingDetail,
+  type Repository,
+  type Risk,
+  relativeTime,
+  STATUSES,
+  statusLabel,
+  type Vulnerability,
+} from "@/lib/findings";
 import { severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
+
+import { updateStatus } from "./actions";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -66,12 +79,7 @@ export default async function FindingPage({
             >
               {vuln.severity}
             </Badge>
-            <Badge
-              variant="outline"
-              className="h-6 border-2 border-foreground bg-card px-2 font-mono text-[11px] font-bold uppercase shadow-brutal-sm"
-            >
-              {vuln.status}
-            </Badge>
+            <StatusBadge status={vuln.status} />
             {vuln.cve && (
               <a
                 href={`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vuln.cve)}`}
@@ -118,6 +126,8 @@ export default async function FindingPage({
             </CardContent>
           </Card>
 
+          <StatusCard vuln={vuln} />
+
           <section
             className="animate-rise space-y-4"
             style={{ animationDelay: "140ms" }}
@@ -152,6 +162,69 @@ export default async function FindingPage({
         </>
       )}
     </div>
+  );
+}
+
+function StatusCard({ vuln }: { vuln: Vulnerability }) {
+  const meta: [string, string][] = [
+    ["First seen", relativeTime(vuln.first_seen)],
+    ["Last seen", relativeTime(vuln.last_seen)],
+    ["Scanner", vuln.scanner ?? "—"],
+    ["Location", vuln.location ?? "—"],
+  ];
+  if (vuln.resolved_at) meta.push(["Resolved", relativeTime(vuln.resolved_at)]);
+  if (vuln.reopened_at) meta.push(["Reopened", relativeTime(vuln.reopened_at)]);
+
+  return (
+    <Card
+      className="brutal animate-rise bg-card"
+      style={{ animationDelay: "110ms" }}
+    >
+      <CardHeader>
+        <CardTitle className="font-mono text-[11px] font-bold uppercase tracking-widest">
+          Status
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <form
+          key={vuln.status}
+          action={updateStatus.bind(null, vuln.id)}
+          className="flex flex-wrap items-center gap-3"
+        >
+          <select
+            name="status"
+            defaultValue={vuln.status}
+            aria-label="Finding status"
+            className="h-9 border-2 border-foreground bg-card px-3 font-mono text-xs font-bold uppercase tracking-widest shadow-brutal-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid"
+          >
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {statusLabel[s]}
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "lg" }),
+              "brutal brutal-lift shadow-brutal-sm bg-acid px-4 font-mono text-xs font-bold uppercase tracking-widest hover:bg-acid",
+            )}
+          >
+            Update
+          </button>
+        </form>
+        <dl className="grid gap-4 sm:grid-cols-3">
+          {meta.map(([label, value]) => (
+            <div key={label} className="space-y-1">
+              <dt className="font-mono text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
+                {label}
+              </dt>
+              <dd className="break-all font-mono text-sm">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
   );
 }
 
