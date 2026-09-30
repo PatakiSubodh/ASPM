@@ -10,10 +10,10 @@ exposed by which vulnerable code, and where did that vulnerability come from?"
 
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Annotated, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase, Driver
 from pydantic import BaseModel, Field, field_validator
@@ -168,6 +168,40 @@ class FindingIngest(BaseModel):
     asset: AssetIn
 
 
+class TrivyVulnerability(BaseModel):
+    VulnerabilityID: str
+    PkgName: str
+    InstalledVersion: str = ""
+    FixedVersion: Optional[str] = None
+    Severity: str
+    Title: Optional[str] = None
+    Description: Optional[str] = None
+
+
+class TrivyResult(BaseModel):
+    Target: str
+    Vulnerabilities: Optional[list[TrivyVulnerability]] = None
+
+
+class TrivyReport(BaseModel):
+    Results: Optional[list[TrivyResult]] = None
+
+
+class TrivyIngestParams(BaseModel):
+    repo_name: str
+    repo_url: str
+    repo_language: Optional[str] = None
+    asset_name: str
+    asset_environment: str
+    asset_type: str
+    asset_internet_facing: bool = False
+
+    @field_validator("repo_name", "asset_name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -317,3 +351,46 @@ def get_graph():
                 links.append({"source": source, "target": target, "type": record["rel"]})
 
     return {"nodes": list(nodes.values()), "links": links}
+
+
+def _trivy_description(vuln: TrivyVulnerability, target: str) -> str:
+    title = vuln.Title or vuln.Description or vuln.VulnerabilityID
+    fix = f"fixed in {vuln.FixedVersion}" if vuln.FixedVersion else "no fix available"
+    return f"{title} ({vuln.PkgName} {vuln.InstalledVersion}, {fix}; {target})"
+
+
+@app.post("/ingest/trivy", status_code=201)
+def ingest_trivy(report: TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
+    repository = RepositoryIn(
+        name=params.repo_name, url=params.repo_url, language=params.repo_language
+    )
+    asset = AssetIn(
+        name=params.asset_name,
+        environment=params.asset_environment,
+        type=params.asset_type,
+        internet_facing=params.asset_internet_facing,
+    )
+
+    findings: dict[str, FindingIngest] = {}
+    skipped = 0
+    for result in report.Results or []:
+        for vuln in result.Vulnerabilities or []:
+            if vuln.Severity not in SEVERITIES:
+                skipped += 1
+                continue
+            finding = FindingIngest(
+                repository=repository,
+                vulnerability=VulnerabilityIn(
+                    id=f"{repository.name}:{vuln.PkgName}:{vuln.VulnerabilityID}",
+                    cve=vuln.VulnerabilityID if vuln.VulnerabilityID.upper().startswith("CVE-") else None,
+                    severity=vuln.Severity,
+                    description=_trivy_description(vuln, result.Target),
+                ),
+                asset=asset,
+            )
+            findings[finding.vulnerability.id] = finding
+
+    for finding in findings.values():
+        ingest_finding(finding)
+
+    return {"ingested": len(findings), "skipped": skipped, "ids": list(findings)}
