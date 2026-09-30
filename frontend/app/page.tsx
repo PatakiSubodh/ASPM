@@ -1,4 +1,5 @@
 import { ArrowRight, ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 
 import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
@@ -11,37 +12,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { type Finding, findingHref } from "@/lib/findings";
 import { SEVERITIES, type Severity, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-interface Repository {
-  name: string;
-  url: string;
-  language?: string;
-}
-
-interface Vulnerability {
-  id: string;
-  cve?: string;
-  severity: Severity;
-  description: string;
-  status: string;
-}
-
-interface Asset {
-  name: string;
-  environment: string;
-  type: string;
-  internet_facing: boolean;
-}
-
-interface Finding {
-  repository: Repository;
-  vulnerability: Vulnerability;
-  asset: Asset;
-}
 
 async function getFindings(): Promise<Finding[]> {
   const res = await fetch(`${API_URL}/findings`, { cache: "no-store" });
@@ -166,9 +141,12 @@ export default async function Home() {
                         </Badge>
                       </TableCell>
                       <TableCell className="min-w-64 max-w-md whitespace-normal px-4 py-5 align-top">
-                        <div className="font-mono font-bold">
+                        <Link
+                          href={findingHref(f.vulnerability.id)}
+                          className="font-mono font-bold underline decoration-2 underline-offset-4 hover:bg-acid"
+                        >
                           {f.vulnerability.cve ?? f.vulnerability.id}
-                        </div>
+                        </Link>
                         <p className="mt-1 text-sm leading-snug text-muted-foreground">
                           {f.vulnerability.description}
                         </p>

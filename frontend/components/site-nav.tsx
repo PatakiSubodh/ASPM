@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 const LINKS = [
   { href: "/", label: "Findings" },
   { href: "/graph", label: "Graph" },
+  { href: "/assets", label: "Assets" },
 ];
 
 export function SiteNav() {

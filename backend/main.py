@@ -244,6 +244,53 @@ def list_findings():
         ]
 
 
+@app.get("/findings/{finding_id}")
+def get_finding(finding_id: str):
+    query = """
+    MATCH (vuln:Vulnerability {id: $id})
+    OPTIONAL MATCH (repo:Repository)-[:CONTAINS]->(vuln)
+    WITH vuln, collect(DISTINCT repo { .* }) AS repositories
+    OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
+    RETURN vuln { .* } AS vulnerability, repositories, collect(DISTINCT asset { .* }) AS assets
+    """
+    db = get_driver()
+    with db.session() as session:
+        record = session.run(query, id=" ".join(finding_id.split()).upper()).single()
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    return {
+        "vulnerability": record["vulnerability"],
+        "repositories": record["repositories"],
+        "assets": record["assets"],
+    }
+
+
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+
+@app.get("/assets")
+def list_assets():
+    query = """
+    MATCH (asset:Asset)
+    OPTIONAL MATCH (vuln:Vulnerability)-[:AFFECTS]->(asset)
+    WHERE vuln.status = 'open'
+    RETURN asset { .* } AS asset, collect(vuln.severity) AS severities
+    ORDER BY asset.name
+    """
+    db = get_driver()
+    with db.session() as session:
+        return [
+            {
+                "asset": record["asset"],
+                "open_by_severity": {s: record["severities"].count(s) for s in SEVERITIES},
+                "open_total": len(record["severities"]),
+            }
+            for record in session.run(query)
+        ]
+
+
 @app.get("/graph")
 def get_graph():
     query = """
