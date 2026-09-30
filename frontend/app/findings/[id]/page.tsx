@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiHeaders } from "@/lib/api";
 import type { Asset, FindingDetail, Repository } from "@/lib/findings";
 import { severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 async function getFinding(id: string): Promise<FindingDetail | null> {
   const res = await fetch(`${API_URL}/findings/${encodeURIComponent(id)}`, {
     cache: "no-store",
+    headers: apiHeaders(),
   });
   if (res.status === 404) return null;
   if (!res.ok) {

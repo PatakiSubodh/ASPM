@@ -9,12 +9,14 @@ exposed by which vulnerable code, and where did that vulnerability come from?"
 """
 
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from neo4j import GraphDatabase, Driver
 from pydantic import BaseModel, Field, field_validator
 
@@ -23,6 +25,7 @@ load_dotenv()
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "aspm_dev_password")
+ASPM_API_KEY = os.getenv("ASPM_API_KEY", "")
 
 driver: Optional[Driver] = None
 
@@ -97,6 +100,8 @@ def seed_sample_data(db: Driver) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global driver
+    if not ASPM_API_KEY:
+        raise RuntimeError("ASPM_API_KEY is not set")
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     driver.verify_connectivity()
     ensure_constraints(driver)
@@ -114,6 +119,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
+    if not api_key or not secrets.compare_digest(api_key, ASPM_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+protected = [Depends(require_api_key)]
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +226,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/findings", status_code=201)
+@app.post("/findings", status_code=201, dependencies=protected)
 def ingest_finding(finding: FindingIngest):
     """Ingest a security finding: links a repository to a vulnerability to
     the production asset it exposes, merging into the existing graph."""
@@ -257,7 +272,7 @@ def ingest_finding(finding: FindingIngest):
     return {"created": dict(record)}
 
 
-@app.get("/findings")
+@app.get("/findings", dependencies=protected)
 def list_findings():
     """Return every repository -> vulnerability -> asset chain in the graph."""
     query = """
@@ -278,7 +293,7 @@ def list_findings():
         ]
 
 
-@app.get("/findings/{finding_id}")
+@app.get("/findings/{finding_id}", dependencies=protected)
 def get_finding(finding_id: str):
     query = """
     MATCH (vuln:Vulnerability {id: $id})
@@ -304,7 +319,7 @@ def get_finding(finding_id: str):
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 
-@app.get("/assets")
+@app.get("/assets", dependencies=protected)
 def list_assets():
     query = """
     MATCH (asset:Asset)
@@ -325,7 +340,7 @@ def list_assets():
         ]
 
 
-@app.get("/graph")
+@app.get("/graph", dependencies=protected)
 def get_graph():
     query = """
     MATCH (n)
@@ -359,7 +374,7 @@ def _trivy_description(vuln: TrivyVulnerability, target: str) -> str:
     return f"{title} ({vuln.PkgName} {vuln.InstalledVersion}, {fix}; {target})"
 
 
-@app.post("/ingest/trivy", status_code=201)
+@app.post("/ingest/trivy", status_code=201, dependencies=protected)
 def ingest_trivy(report: TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
     repository = RepositoryIn(
         name=params.repo_name, url=params.repo_url, language=params.repo_language

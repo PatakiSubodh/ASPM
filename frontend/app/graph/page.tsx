@@ -1,11 +1,15 @@
 import FindingsGraph from "@/components/graph-view";
 import { StateCard } from "@/components/state-card";
+import { apiHeaders } from "@/lib/api";
 import type { GraphData } from "@/lib/graph";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function getGraph(): Promise<GraphData> {
-  const res = await fetch(`${API_URL}/graph`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/graph`, {
+    cache: "no-store",
+    headers: apiHeaders(),
+  });
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }

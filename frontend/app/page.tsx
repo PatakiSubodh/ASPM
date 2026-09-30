@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { apiHeaders } from "@/lib/api";
 import { type Finding, findingHref } from "@/lib/findings";
 import { SEVERITIES, type Severity, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
@@ -19,7 +20,10 @@ import { cn } from "@/lib/utils";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 async function getFindings(): Promise<Finding[]> {
-  const res = await fetch(`${API_URL}/findings`, { cache: "no-store" });
+  const res = await fetch(`${API_URL}/findings`, {
+    cache: "no-store",
+    headers: apiHeaders(),
+  });
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }
