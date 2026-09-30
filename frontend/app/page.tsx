@@ -1,6 +1,7 @@
 import { ArrowRight, ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 
+import { RiskBadge } from "@/components/risk-badge";
 import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,8 +43,9 @@ export default async function Home() {
 
   findings.sort(
     (a, b) =>
+      b.risk.score - a.risk.score ||
       SEVERITIES.indexOf(a.vulnerability.severity) -
-      SEVERITIES.indexOf(b.vulnerability.severity),
+        SEVERITIES.indexOf(b.vulnerability.severity),
   );
 
   const counts = Object.fromEntries(
@@ -116,7 +118,7 @@ export default async function Home() {
               <Table>
                 <TableHeader className="bg-foreground">
                   <TableRow className="border-0 hover:bg-foreground">
-                    {["Sev", "Vulnerability", "Path", "Env", "Exposure"].map(
+                    {["Risk", "Sev", "Vulnerability", "Path", "Env", "Exposure"].map(
                       (h) => (
                         <TableHead
                           key={h}
@@ -134,6 +136,9 @@ export default async function Home() {
                       key={`${f.vulnerability.id}:${f.asset.name}`}
                       className="border-b-2 border-foreground hover:bg-acid/25"
                     >
+                      <TableCell className="px-4 py-5 align-top">
+                        <RiskBadge risk={f.risk} />
+                      </TableCell>
                       <TableCell className="px-4 py-5 align-top">
                         <Badge
                           className={cn(

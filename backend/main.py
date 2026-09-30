@@ -278,19 +278,19 @@ def list_findings():
     query = """
     MATCH (repo:Repository)-[:CONTAINS]->(vuln:Vulnerability)-[:AFFECTS]->(asset:Asset)
     RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
-    ORDER BY vuln.severity DESC
     """
     db = get_driver()
     with db.session() as session:
-        results = session.run(query)
-        return [
+        findings = [
             {
                 "repository": record["repository"],
                 "vulnerability": record["vulnerability"],
                 "asset": record["asset"],
+                "risk": asset_risk(record["vulnerability"]["severity"], record["asset"]),
             }
-            for record in results
+            for record in session.run(query)
         ]
+    return sorted(findings, key=lambda f: f["risk"]["score"], reverse=True)
 
 
 @app.get("/findings/{finding_id}", dependencies=protected)
@@ -309,14 +309,58 @@ def get_finding(finding_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="Finding not found")
 
+    severity = record["vulnerability"]["severity"]
+    asset_risks = {a["name"]: asset_risk(severity, a) for a in record["assets"]}
     return {
         "vulnerability": record["vulnerability"],
         "repositories": record["repositories"],
         "assets": record["assets"],
+        "risk": max(asset_risks.values(), key=lambda r: r["score"], default=None),
+        "asset_risks": asset_risks,
     }
 
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+SEVERITY_WEIGHT = {"CRITICAL": 10, "HIGH": 7, "MEDIUM": 4, "LOW": 1}
+ENVIRONMENT_WEIGHT = {
+    "production": 1.0,
+    "prod": 1.0,
+    "staging": 0.6,
+    "stage": 0.6,
+    "uat": 0.6,
+    "qa": 0.6,
+    "development": 0.3,
+    "dev": 0.3,
+    "test": 0.3,
+}
+DEFAULT_ENVIRONMENT_WEIGHT = 0.6
+INTERNET_FACING_WEIGHT = 1.5
+MAX_RISK = SEVERITY_WEIGHT["CRITICAL"] * ENVIRONMENT_WEIGHT["production"] * INTERNET_FACING_WEIGHT
+PRIORITY_BANDS = ((70, "P1"), (40, "P2"), (20, "P3"), (0, "P4"))
+
+
+def risk_score(severity: str, environment: Optional[str], internet_facing: bool) -> dict:
+    severity_weight = SEVERITY_WEIGHT.get(severity, SEVERITY_WEIGHT["LOW"])
+    environment_weight = ENVIRONMENT_WEIGHT.get(
+        (environment or "").strip().lower(), DEFAULT_ENVIRONMENT_WEIGHT
+    )
+    exposure_weight = INTERNET_FACING_WEIGHT if internet_facing else 1.0
+    score = min(100, round(severity_weight * environment_weight * exposure_weight / MAX_RISK * 100))
+    priority = next(p for threshold, p in PRIORITY_BANDS if score >= threshold)
+    return {
+        "score": score,
+        "priority": priority,
+        "factors": {
+            "severity": severity_weight,
+            "environment": environment_weight,
+            "exposure": exposure_weight,
+        },
+    }
+
+
+def asset_risk(severity: str, asset: dict) -> dict:
+    return risk_score(severity, asset.get("environment"), bool(asset.get("internet_facing")))
 
 
 @app.get("/assets", dependencies=protected)
@@ -335,6 +379,11 @@ def list_assets():
                 "asset": record["asset"],
                 "open_by_severity": {s: record["severities"].count(s) for s in SEVERITIES},
                 "open_total": len(record["severities"]),
+                "risk": max(
+                    (asset_risk(s, record["asset"]) for s in record["severities"]),
+                    key=lambda r: r["score"],
+                    default=None,
+                ),
             }
             for record in session.run(query)
         ]

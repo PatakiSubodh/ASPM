@@ -1,3 +1,4 @@
+import { RiskBadge } from "@/components/risk-badge";
 import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -38,6 +39,8 @@ export default async function AssetsPage() {
   }
 
   assets.sort((a, b) => {
+    const riskDiff = (b.risk?.score ?? -1) - (a.risk?.score ?? -1);
+    if (riskDiff !== 0) return riskDiff;
     for (const s of SEVERITIES) {
       const diff = b.open_by_severity[s] - a.open_by_severity[s];
       if (diff !== 0) return diff;
@@ -59,7 +62,7 @@ export default async function AssetsPage() {
           .
         </h1>
         <p className="max-w-xl font-mono text-sm text-muted-foreground">
-          Every asset in the graph, ranked by the open vulnerabilities that hit it.
+          Every asset in the graph, ranked by the riskiest open vulnerability that hits it.
         </p>
       </section>
 
@@ -85,7 +88,7 @@ export default async function AssetsPage() {
             <Table>
               <TableHeader className="bg-foreground">
                 <TableRow className="border-0 hover:bg-foreground">
-                  {["Asset", "Env", "Exposure", ...SEVERITIES, "Open"].map(
+                  {["Risk", "Asset", "Env", "Exposure", ...SEVERITIES, "Open"].map(
                     (h) => (
                       <TableHead
                         key={h}
@@ -98,11 +101,20 @@ export default async function AssetsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {assets.map(({ asset, open_by_severity, open_total }) => (
+                {assets.map(({ asset, open_by_severity, open_total, risk }) => (
                   <TableRow
                     key={asset.name}
                     className="border-b-2 border-foreground hover:bg-acid/25"
                   >
+                    <TableCell className="px-4 py-5 align-top">
+                      {risk ? (
+                        <RiskBadge risk={risk} />
+                      ) : (
+                        <span className="font-mono text-[11px] uppercase text-muted-foreground">
+                          None
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="px-4 py-5 align-top">
                       <div className="font-mono font-bold">{asset.name}</div>
                       <p className="mt-1 font-mono text-[11px] uppercase text-muted-foreground">

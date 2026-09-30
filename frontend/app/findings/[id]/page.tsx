@@ -1,11 +1,12 @@
 import { ArrowDown, ArrowRight, ArrowUpRight } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { RiskBadge } from "@/components/risk-badge";
 import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiHeaders } from "@/lib/api";
-import type { Asset, FindingDetail, Repository } from "@/lib/findings";
+import type { Asset, FindingDetail, Repository, Risk } from "@/lib/findings";
 import { severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +57,7 @@ export default async function FindingPage({
         </h1>
         {vuln && (
           <div className="flex flex-wrap items-center gap-3">
+            {finding?.risk && <RiskBadge risk={finding.risk} />}
             <Badge
               className={cn(
                 "h-6 border-2 border-foreground px-2 font-mono text-[11px] font-bold text-foreground shadow-brutal-sm",
@@ -138,7 +140,11 @@ export default async function FindingPage({
               <PathArrow />
               <PathColumn title="Asset" count={finding.assets.length}>
                 {finding.assets.map((asset) => (
-                  <AssetRow key={asset.name} asset={asset} />
+                  <AssetRow
+                    key={asset.name}
+                    asset={asset}
+                    risk={finding.asset_risks[asset.name]}
+                  />
                 ))}
               </PathColumn>
             </div>
@@ -209,10 +215,11 @@ function RepoRow({ repo }: { repo: Repository }) {
   );
 }
 
-function AssetRow({ asset }: { asset: Asset }) {
+function AssetRow({ asset, risk }: { asset: Asset; risk?: Risk }) {
   return (
     <div className="space-y-2 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
+        {risk && <RiskBadge risk={risk} />}
         <span className="font-mono text-sm font-bold">{asset.name}</span>
         {asset.internet_facing && (
           <Badge className="h-6 -rotate-3 border-2 border-foreground bg-foreground px-2 font-mono text-[11px] font-bold uppercase text-acid">
