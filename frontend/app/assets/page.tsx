@@ -67,15 +67,14 @@ export default async function AssetsPage() {
       </section>
 
       {error && (
-        <StateCard tone="error" title="API unreachable">
-          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
-          <code>docker compose up -d</code>.
+        <StateCard tone="error" title="Couldn&apos;t load assets">
+          The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
       )}
 
       {!error && assets.length === 0 && (
         <StateCard tone="empty" title="No assets yet">
-          Ingest one via <code>POST /findings</code> and it shows up here.
+          Assets appear here once a scan links your code to where it runs.
         </StateCard>
       )}
 

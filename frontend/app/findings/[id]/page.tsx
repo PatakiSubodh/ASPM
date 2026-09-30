@@ -96,15 +96,14 @@ export default async function FindingPage({
       </section>
 
       {error && (
-        <StateCard tone="error" title="API unreachable">
-          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
-          <code>docker compose up -d</code>.
+        <StateCard tone="error" title="Couldn&apos;t load this finding">
+          The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
       )}
 
       {!error && !finding && (
         <StateCard tone="empty" title="Finding not found">
-          No vulnerability with id <code>{id}</code> in the graph.
+          We couldn&apos;t find <code>{id}</code>. It may have been removed.
         </StateCard>
       )}
 

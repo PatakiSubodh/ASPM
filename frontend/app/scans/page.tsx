@@ -61,15 +61,14 @@ export default async function ScansPage() {
       </section>
 
       {error && (
-        <StateCard tone="error" title="API unreachable">
-          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
-          <code>docker compose up -d</code>.
+        <StateCard tone="error" title="Couldn&apos;t load scans">
+          The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
       )}
 
       {!error && scans.length === 0 && (
         <StateCard tone="empty" title="No scans yet">
-          Post a report to <code>POST /ingest/trivy</code> and the run shows up here.
+          Scan runs appear here as soon as the first one finishes.
         </StateCard>
       )}
 

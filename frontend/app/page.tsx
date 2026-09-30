@@ -87,9 +87,8 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       </section>
 
       {error && (
-        <StateCard tone="error" title="API unreachable">
-          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
-          <code>docker compose up -d</code>.
+        <StateCard tone="error" title="Couldn&apos;t load findings">
+          The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
       )}
 
@@ -112,9 +111,13 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       )}
 
       {!error && findings.length === 0 && (
-        <StateCard tone="empty" title="Nothing here yet">
-          No findings match this filter. Ingest one via <code>POST /findings</code>{" "}
-          or <code>POST /ingest/trivy</code> and it shows up here.
+        <StateCard
+          tone="empty"
+          title={status === "active" ? "Nothing exposed" : "No matches"}
+        >
+          {status === "active"
+            ? "No open findings right now. New issues appear here as soon as a scan reports them."
+            : "No findings with this status. Try another filter."}
         </StateCard>
       )}
 

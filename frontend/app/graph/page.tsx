@@ -40,6 +40,9 @@ export default async function GraphPage() {
             </span>
             .
           </h1>
+          <p className="max-w-xl font-mono text-sm text-muted-foreground">
+            How open issues in your code reach running assets. Click a node to trace it.
+          </p>
         </div>
         {graph && graph.nodes.length > 0 && (
           <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
@@ -49,15 +52,14 @@ export default async function GraphPage() {
       </section>
 
       {error && (
-        <StateCard tone="error" title="API unreachable">
-          {error}. Start the backend on <code>{API_URL}</code> and Neo4j with{" "}
-          <code>docker compose up -d</code>.
+        <StateCard tone="error" title="Couldn&apos;t load the graph">
+          The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
       )}
 
       {graph && graph.nodes.length === 0 && (
-        <StateCard tone="empty" title="Graph is empty">
-          Ingest one via <code>POST /findings</code> and it shows up here.
+        <StateCard tone="empty" title="Nothing to map yet">
+          Once your first scan finishes, the path from code to running assets is drawn here.
         </StateCard>
       )}
 
