@@ -82,7 +82,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           .
         </h1>
         <p className="max-w-xl font-mono text-sm text-muted-foreground">
-          Repository → vulnerability → production asset. Live from Neo4j.
+          Repository → vulnerability → production asset, ranked by risk.
         </p>
       </section>
 

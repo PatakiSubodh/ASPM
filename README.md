@@ -179,6 +179,6 @@ frontend/
 
 - Single shared API key; the web UI has no user login.
 - Only Trivy is supported as a scanner connector, and reports are pushed manually.
-- No tests or CI yet.
+- Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
 - Risk weights are hardcoded; no exploitability (EPSS/KEV) or asset-criticality input.
 - Local-dev defaults (Neo4j password, plaintext `.env`) are not production-ready.

@@ -62,7 +62,7 @@ export default async function AssetsPage() {
           .
         </h1>
         <p className="max-w-xl font-mono text-sm text-muted-foreground">
-          Every asset in the graph, ranked by the riskiest open vulnerability that hits it.
+          Every asset, ranked by the riskiest open vulnerability that hits it.
         </p>
       </section>
 
