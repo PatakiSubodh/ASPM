@@ -24,7 +24,11 @@ async function getFinding(id: string): Promise<FindingDetail | null> {
 export default async function FindingPage({
   params,
 }: PageProps<"/findings/[id]">) {
-  const { id } = await params;
+  const { id: rawId } = await params;
+  let id = rawId;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {}
   let finding: FindingDetail | null = null;
   let error: string | null = null;
 
