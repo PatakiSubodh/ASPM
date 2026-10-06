@@ -27,8 +27,12 @@ flowchart LR
     -[:CONTAINS]->
 (:Vulnerability {id, cve, severity, description, status})
     -[:AFFECTS]->
-(:Asset {name, environment, type, internet_facing})
+(:Asset {name, environment, type, internet_facing, source})
+
+(:Repository)-[:DEPLOYS_TO]->(:Asset)
 ```
+
+- `DEPLOYS_TO` comes from `catalog.yaml`. A finding in a repository `AFFECTS` every asset that repository deploys to, so scanners only need the repo name.
 
 - Keys (`Repository.name`, `Vulnerability.id`, `Asset.name`) are unique-constrained and normalized on ingest (whitespace collapsed; repo/asset names lower-cased, vulnerability ids upper-cased), so re-ingesting merges instead of duplicating.
 - A *finding* is one `Repository → Vulnerability → Asset` chain.
@@ -123,13 +127,30 @@ curl -X POST http://localhost:8000/findings \
        "asset":{"name":"prod-payments-api","environment":"production","type":"Kubernetes Service","internet_facing":true}}'
 ```
 
-Ingest a Trivy report:
+Declare repositories and where they run in `catalog.yaml` (repo root). The API loads it on startup (`CATALOG_PATH`, mounted read-only in compose); `POST /catalog` applies the same structure as JSON. Each listed repository's `DEPLOYS_TO` edges are replaced by its `assets` list, and existing findings are linked to newly added assets. Set `assets: []` to unmap a repository.
+
+```yaml
+repositories:
+  - name: my-repo
+    url: https://github.com/org/my-repo
+    language: Python
+    branch: main
+    assets:
+      - name: prod-api
+        environment: production
+        type: Docker container
+        internet_facing: true
+```
+
+Ingest a Trivy report for a catalog repository:
 
 ```bash
 trivy fs --scanners vuln --format json . > trivy.json
-curl -X POST "http://localhost:8000/ingest/trivy?repo_name=my-repo&repo_url=https://github.com/org/my-repo&asset_name=prod-api&asset_environment=production&asset_type=Container&asset_internet_facing=true" \
+curl -X POST "http://localhost:8000/ingest/trivy?repo_name=my-repo" \
   -H "X-API-Key: <key>" -H "Content-Type: application/json" --data-binary @trivy.json
 ```
+
+For a repository not in the catalog, add `&repo_url=`; to link one extra asset explicitly, add `&asset_name=&asset_environment=&asset_type=&asset_internet_facing=` (all three of name, environment and type together).
 
 Each Trivy post is one scan run. New findings start `open`; findings the run no longer reports (same repo and scanner) become `resolved`; a `resolved` finding that comes back is reopened. Statuses set by people (`in_progress`, `accepted_risk`, `false_positive`) are kept. Add `&commit=<sha>` to record the commit, and `&partial=true` for scans of part of a repo so nothing is auto-resolved. The response is `{scan_id, ingested, resolved, reopened, skipped, ids}`.
 
@@ -147,7 +168,9 @@ All routes except `/health` require `X-API-Key`.
 | `GET` | `/assets` | Assets with open / in-progress vulnerability counts per severity and worst risk |
 | `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings` |
 | `GET` | `/scans` | Scan runs, newest first; `?repo=`, `?limit=` |
-| `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=` |
+| `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
+| `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
+| `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
 
 ## UI
 
@@ -158,12 +181,14 @@ All routes except `/health` require `X-API-Key`.
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
 | `/assets` | Asset inventory ranked by risk |
 | `/scans` | Scan history with ingested / resolved / reopened counts |
+| `/catalog` | Repositories, the assets each deploys to, and which are unmapped |
 
 ## Project layout
 
 ```
 docker-compose.yml     neo4j + api + web (+ demo-seed under the demo profile)
 .env.example           compose configuration
+catalog.yaml           repositories and the assets they deploy to
 demo/                  opt-in sample data: seed.cypher, purge.cypher, trivy-sample.json
 backend/
   main.py              FastAPI app: models, auth, routes, risk scoring, Trivy connector

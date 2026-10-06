@@ -37,11 +37,10 @@ def repo(client):
             MATCH (r:Repository {name: $repo})
             OPTIONAL MATCH (r)-[:CONTAINS]->(v:Vulnerability)
             OPTIONAL MATCH (s:Scan)-[:SCANNED]->(r)
-            OPTIONAL MATCH (a:Asset {name: $asset})
+            OPTIONAL MATCH (a:Asset) WHERE a.name STARTS WITH $repo
             WITH collect(DISTINCT r) + collect(DISTINCT v) + collect(DISTINCT s) + collect(DISTINCT a) AS nodes
             UNWIND nodes AS n
             DETACH DELETE n
             """,
             repo=name,
-            asset=f"{name}-api",
         ).consume()

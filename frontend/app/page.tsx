@@ -213,9 +213,13 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                           {f.asset ? (
                             <span>{f.asset.name}</span>
                           ) : (
-                            <span className="text-[11px] uppercase text-muted-foreground">
-                              No asset
-                            </span>
+                            <Badge
+                              variant="outline"
+                              title="This repository isn't linked to a deployment yet"
+                              className="h-6 border-2 border-dashed border-foreground bg-card px-2 font-mono text-[11px] font-bold uppercase"
+                            >
+                              Unmapped
+                            </Badge>
                           )}
                         </div>
                       </TableCell>

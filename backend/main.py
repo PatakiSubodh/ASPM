@@ -12,15 +12,17 @@ import os
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Literal, Optional
 from uuid import uuid4
 
+import yaml
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from neo4j import GraphDatabase, Driver
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 load_dotenv()
 
@@ -28,6 +30,7 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "aspm_dev_password")
 ASPM_API_KEY = os.getenv("ASPM_API_KEY", "")
+CATALOG_PATH = os.getenv("CATALOG_PATH", "/app/catalog.yaml")
 
 driver: Optional[Driver] = None
 
@@ -68,6 +71,7 @@ async def lifespan(app: FastAPI):
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     driver.verify_connectivity()
     ensure_constraints(driver)
+    load_catalog_file(driver)
     yield
     driver.close()
 
@@ -105,7 +109,7 @@ def _normalize_key(value: str) -> str:
 
 class RepositoryIn(BaseModel):
     name: str
-    url: str
+    url: Optional[str] = None
     language: Optional[str] = None
 
     @field_validator("name")
@@ -141,7 +145,32 @@ class AssetIn(BaseModel):
 class FindingIngest(BaseModel):
     repository: RepositoryIn
     vulnerability: VulnerabilityIn
-    asset: AssetIn
+    asset: Optional[AssetIn] = None
+
+
+class CatalogRepository(BaseModel):
+    name: str
+    url: str
+    language: Optional[str] = None
+    branch: Optional[str] = None
+    assets: list[AssetIn] = []
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
+
+
+class CatalogIn(BaseModel):
+    repositories: list[CatalogRepository] = []
+
+    @model_validator(mode="after")
+    def unique_repositories(self) -> "CatalogIn":
+        names = [r.name for r in self.repositories]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate repositories: {', '.join(duplicates)}")
+        return self
 
 
 class TrivyVulnerability(BaseModel):
@@ -165,11 +194,11 @@ class TrivyReport(BaseModel):
 
 class TrivyIngestParams(BaseModel):
     repo_name: str
-    repo_url: str
+    repo_url: Optional[str] = None
     repo_language: Optional[str] = None
-    asset_name: str
-    asset_environment: str
-    asset_type: str
+    asset_name: Optional[str] = None
+    asset_environment: Optional[str] = None
+    asset_type: Optional[str] = None
     asset_internet_facing: bool = False
     commit: Optional[str] = None
     partial: bool = False
@@ -212,19 +241,23 @@ def health():
     return {"status": "ok"}
 
 
-INGEST_BATCH_QUERY = """
-MERGE (repo:Repository {name: $repo.name})
-  ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
+ASSET_UPSERT_QUERY = """
 MERGE (asset:Asset {name: $asset.name})
   ON CREATE SET
     asset.environment = $asset.environment,
     asset.type = $asset.type,
     asset.internet_facing = $asset.internet_facing
-WITH repo, asset
+"""
+
+INGEST_BATCH_QUERY = """
+MERGE (repo:Repository {name: $repo.name})
+  ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
+WITH repo
+OPTIONAL MATCH (explicit:Asset {name: $asset_name})
 UNWIND $findings AS f
 MERGE (vuln:Vulnerability {id: f.id})
   ON CREATE SET vuln.status = 'open', vuln.first_seen = $now
-WITH repo, asset, f, vuln, vuln.status = 'resolved' AS reopened
+WITH repo, explicit, f, vuln, vuln.status = 'resolved' AS reopened
 SET vuln.cve = f.cve,
     vuln.severity = f.severity,
     vuln.description = f.description,
@@ -240,7 +273,17 @@ SET vuln.cve = f.cve,
     vuln.reopened_at = CASE WHEN reopened THEN $now ELSE vuln.reopened_at END,
     vuln.resolved_at = CASE WHEN reopened THEN null ELSE vuln.resolved_at END
 MERGE (repo)-[:CONTAINS]->(vuln)
-MERGE (vuln)-[:AFFECTS]->(asset)
+WITH repo, explicit, vuln, reopened
+CALL (vuln, explicit) {
+  WITH vuln, explicit WHERE explicit IS NOT NULL
+  MERGE (vuln)-[affects:AFFECTS]->(explicit)
+  SET affects.source = 'ingest'
+}
+CALL (repo, vuln) {
+  MATCH (repo)-[:DEPLOYS_TO]->(deployed:Asset)
+  MERGE (vuln)-[affects:AFFECTS]->(deployed)
+    ON CREATE SET affects.source = 'catalog'
+}
 RETURN count(vuln) AS ingested, sum(CASE WHEN reopened THEN 1 ELSE 0 END) AS reopened
 """
 
@@ -255,17 +298,19 @@ RETURN count(v) AS resolved
 def ingest_batch(
     tx,
     repo: RepositoryIn,
-    asset: AssetIn,
+    asset: Optional[AssetIn],
     scanner: str,
     scan_id: Optional[str],
     findings: list[dict],
     now: str,
     type: Optional[str] = None,
 ) -> dict:
+    if asset is not None:
+        tx.run(ASSET_UPSERT_QUERY, asset=asset.model_dump()).consume()
     record = tx.run(
         INGEST_BATCH_QUERY,
         repo=repo.model_dump(),
-        asset=asset.model_dump(),
+        asset_name=asset.name if asset else None,
         scanner=scanner,
         scan_id=scan_id,
         type=type,
@@ -277,7 +322,7 @@ def ingest_batch(
 
 def run_scan(
     repo: RepositoryIn,
-    asset: AssetIn,
+    asset: Optional[AssetIn],
     scanner: str,
     type: str,
     findings: list[dict],
@@ -338,9 +383,114 @@ def run_scan(
         return session.execute_write(work)
 
 
+def require_known_repository(repo: RepositoryIn) -> None:
+    if repo.url:
+        return
+    with get_driver().session() as session:
+        exists = session.run(
+            "MATCH (r:Repository {name: $name}) RETURN count(r) > 0 AS exists",
+            name=repo.name,
+        ).single()["exists"]
+    if not exists:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown repository '{repo.name}': add it to the catalog or pass its url",
+        )
+
+
+CATALOG_UPSERT_QUERY = """
+UNWIND $repositories AS r
+MERGE (repo:Repository {name: r.name})
+SET repo.url = r.url,
+    repo.language = coalesce(r.language, repo.language),
+    repo.branch = coalesce(r.branch, repo.branch)
+WITH repo, r
+UNWIND r.assets AS a
+MERGE (asset:Asset {name: a.name})
+SET asset.environment = a.environment,
+    asset.type = a.type,
+    asset.internet_facing = a.internet_facing,
+    asset.source = 'catalog'
+MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
+  ON CREATE SET deploys.source = 'catalog'
+"""
+
+CATALOG_PRUNE_QUERY = """
+UNWIND $repositories AS r
+MATCH (repo:Repository {name: r.name})-[deploys:DEPLOYS_TO {source: 'catalog'}]->(asset:Asset)
+WHERE NOT asset.name IN [a IN r.assets | a.name]
+CALL (repo, asset) {
+  MATCH (repo)-[:CONTAINS]->(:Vulnerability)-[derived:AFFECTS {source: 'catalog'}]->(asset)
+  DELETE derived
+}
+DELETE deploys
+RETURN count(deploys) AS unlinked
+"""
+
+CATALOG_BACKFILL_QUERY = """
+UNWIND $repositories AS r
+MATCH (repo:Repository {name: r.name})-[:DEPLOYS_TO]->(asset:Asset)
+MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
+MERGE (vuln)-[affects:AFFECTS]->(asset)
+  ON CREATE SET affects.source = 'catalog'
+"""
+
+
+def apply_catalog(tx, catalog: CatalogIn) -> dict:
+    repositories = [r.model_dump() for r in catalog.repositories]
+    linked = tx.run(CATALOG_UPSERT_QUERY, repositories=repositories).consume().counters
+    unlinked = tx.run(CATALOG_PRUNE_QUERY, repositories=repositories).single()["unlinked"]
+    backfilled = tx.run(CATALOG_BACKFILL_QUERY, repositories=repositories).consume().counters
+    return {
+        "repositories": len(repositories),
+        "assets": len({a["name"] for r in repositories for a in r["assets"]}),
+        "linked": linked.relationships_created,
+        "unlinked": unlinked,
+        "backfilled": backfilled.relationships_created,
+    }
+
+
+def load_catalog_file(db: Driver) -> None:
+    path = Path(CATALOG_PATH)
+    if not path.is_file():
+        return
+    catalog = CatalogIn.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    with db.session() as session:
+        session.execute_write(apply_catalog, catalog)
+
+
+@app.post("/catalog", dependencies=protected)
+def upsert_catalog(catalog: CatalogIn):
+    with get_driver().session() as session:
+        return session.execute_write(apply_catalog, catalog)
+
+
+@app.get("/catalog", dependencies=protected)
+def get_catalog():
+    query = """
+    MATCH (repo:Repository)
+    OPTIONAL MATCH (repo)-[:DEPLOYS_TO]->(asset:Asset)
+    WITH repo, collect(asset { .* }) AS assets
+    OPTIONAL MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
+    WHERE vuln.status IN $statuses
+    RETURN repo { .* } AS repository, assets, count(vuln) AS open_total
+    ORDER BY repository.name
+    """
+    with get_driver().session() as session:
+        return [
+            {
+                "repository": record["repository"],
+                "assets": sorted(record["assets"], key=lambda a: a["name"]),
+                "open_total": record["open_total"],
+            }
+            for record in session.run(query, statuses=ACTIVE_STATUSES)
+        ]
+
+
 @app.post("/findings", status_code=201, dependencies=protected)
 def ingest_finding(finding: FindingIngest):
     vuln = finding.vulnerability
+    require_known_repository(finding.repository)
     with get_driver().session() as session:
         session.execute_write(
             ingest_batch,
@@ -362,7 +512,7 @@ def ingest_finding(finding: FindingIngest):
         "created": {
             "repository": finding.repository.name,
             "vulnerability": vuln.id,
-            "asset": finding.asset.name,
+            "asset": finding.asset.name if finding.asset else None,
         }
     }
 
@@ -575,12 +725,23 @@ def ingest_trivy(report: TrivyReport, params: Annotated[TrivyIngestParams, Query
     repository = RepositoryIn(
         name=params.repo_name, url=params.repo_url, language=params.repo_language
     )
-    asset = AssetIn(
-        name=params.asset_name,
-        environment=params.asset_environment,
-        type=params.asset_type,
-        internet_facing=params.asset_internet_facing,
+    asset_fields = (params.asset_name, params.asset_environment, params.asset_type)
+    if any(asset_fields) and not all(asset_fields):
+        raise HTTPException(
+            status_code=422,
+            detail="asset_name, asset_environment and asset_type must be given together",
+        )
+    asset = (
+        AssetIn(
+            name=params.asset_name,
+            environment=params.asset_environment,
+            type=params.asset_type,
+            internet_facing=params.asset_internet_facing,
+        )
+        if params.asset_name
+        else None
     )
+    require_known_repository(repository)
 
     findings: dict[str, dict] = {}
     skipped = 0

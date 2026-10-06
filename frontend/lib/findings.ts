@@ -51,6 +51,7 @@ export interface Repository {
   name: string;
   url: string;
   language?: string;
+  branch?: string;
   last_scanned_at?: string;
 }
 
@@ -78,6 +79,13 @@ export interface Asset {
   environment: string;
   type: string;
   internet_facing: boolean;
+  source?: string;
+}
+
+export interface CatalogEntry {
+  repository: Repository;
+  assets: Asset[];
+  open_total: number;
 }
 
 export interface Finding {

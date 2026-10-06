@@ -24,6 +24,18 @@ SET asset.environment = a.environment,
     asset.demo = true;
 
 UNWIND [
+  ['acme-payments', 'acme-payments-api'],
+  ['acme-payments', 'acme-staging-gateway'],
+  ['acme-storefront', 'acme-storefront-web'],
+  ['acme-storefront', 'acme-staging-gateway'],
+  ['acme-auth', 'acme-auth-api'],
+  ['acme-auth', 'acme-dev-sandbox']
+] AS d
+MATCH (repo:Repository {name: d[0]}), (asset:Asset {name: d[1]})
+MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
+SET deploys.source = 'demo';
+
+UNWIND [
   {id: 'demo-scan-payments-1', repo: 'acme-payments', scanner: 'trivy', commit: '4e1c9a2', started: 'P7D', ingested: 3, resolved: 0, reopened: 0},
   {id: 'demo-scan-payments-2', repo: 'acme-payments', scanner: 'trivy', commit: '9b07d3f', started: 'PT2H', ingested: 2, resolved: 1, reopened: 0},
   {id: 'demo-scan-storefront-1', repo: 'acme-storefront', scanner: 'trivy', commit: 'c2f81e0', started: 'PT5H', ingested: 3, resolved: 0, reopened: 1},

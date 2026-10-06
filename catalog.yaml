@@ -1,0 +1,14 @@
+repositories:
+  - name: aspm
+    url: https://github.com/PatakiSubodh/ASPM
+    language: Python
+    branch: dev
+    assets:
+      - name: aspm-api
+        environment: production
+        type: Docker container
+        internet_facing: false
+      - name: aspm-web
+        environment: production
+        type: Docker container
+        internet_facing: true

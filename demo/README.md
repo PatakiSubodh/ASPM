@@ -12,6 +12,7 @@ Everything fake lives here. Nothing in `backend/` or `frontend/` creates sample 
 
 - 4 repositories (`acme-*`), 5 assets across production, staging and development, internet-facing and internal.
 - 11 findings: all four severities, P1 to P4, every status (`open`, `in_progress`, `resolved`, `accepted_risk`, `false_positive`), SCA and SAST types.
+- `DEPLOYS_TO` edges (`source: 'demo'`) for the `/catalog` page; `POST /catalog` and the startup catalog load never prune them.
 - `acme-reports` has no deployed asset, so its Log4Shell finding is unmapped.
 - `acme-staging-gateway` is shared by `acme-payments` and `acme-storefront`.
 - 6 scan runs with ingested / resolved / reopened counts.
