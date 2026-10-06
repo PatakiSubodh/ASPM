@@ -63,3 +63,51 @@ def test_failed_scan_rejects_bad_input(client, repo):
 
     assert client.post("/scans/failed", json={**body, "scanner": "Trivy!"}).status_code == 422
     assert client.post("/scans/failed", json={**body, "scanner": "trivy", "error": ""}).status_code == 422
+
+
+def failing(client, repo: str) -> list[dict]:
+    res = client.get("/scans/failing")
+    assert res.status_code == 200, res.text
+    return [f for f in res.json() if f["repository"] == repo]
+
+
+def test_failing_lists_repo_whose_latest_scan_failed(client, repo):
+    ingest(client, repo, report("pyyaml"))
+    succeeded_at = scans(client, repo)[0]["finished_at"]
+    result = fail(client, repo)
+
+    rows = failing(client, repo)
+
+    assert len(rows) == 1
+    assert rows[0]["scanner"] == "trivy"
+    assert rows[0]["error"] == "Trivy scan failed"
+    assert rows[0]["failed_at"] == scans(client, repo)[0]["started_at"]
+    assert rows[0]["last_succeeded_at"] == succeeded_at
+    assert result["status"] == "failed"
+
+
+def test_failing_clears_after_successful_rescan(client, repo):
+    ingest(client, repo, report("pyyaml"))
+    fail(client, repo)
+    ingest(client, repo, report("pyyaml"))
+
+    assert failing(client, repo) == []
+
+
+def test_failing_is_per_scanner(client, repo):
+    ingest(client, repo, report("pyyaml"))
+    fail(client, repo, scanner="semgrep", error="Semgrep scan failed")
+    ingest(client, repo, report("pyyaml"))
+
+    rows = failing(client, repo)
+
+    assert [r["scanner"] for r in rows] == ["semgrep"]
+
+
+def test_never_scanned_successfully(client, repo):
+    fail(client, repo, repo_url=f"https://git.example.com/{repo}", error="Couldn't clone the repository")
+
+    rows = failing(client, repo)
+
+    assert len(rows) == 1
+    assert rows[0]["last_succeeded_at"] is None

@@ -180,6 +180,7 @@ All routes except `/health` require `X-API-Key`.
 | `GET` | `/assets` | Assets with open / in-progress vulnerability counts per severity and worst risk |
 | `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings` |
 | `GET` | `/scans` | Scan runs, newest first, with `status` (`succeeded` / `failed`); `?repo=`, `?limit=` |
+| `GET` | `/scans/failing` | Repositories whose latest scan (per scanner) failed, with reason and last successful scan time |
 | `POST` | `/scans/failed` | Record a failed scan run (`repo_name`, `scanner`, `error`, optional `repo_url`, `commit`, `detail`); never resolves anything |
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
 | `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
@@ -189,7 +190,7 @@ All routes except `/health` require `X-API-Key`.
 
 | Page | What it shows |
 |---|---|
-| `/` | Findings table ranked by risk, severity summary tiles, status filter, first / last seen |
+| `/` | Findings table ranked by risk, severity summary tiles, status filter, first / last seen; red warning when a repository's latest scan failed |
 | `/graph` | Interactive force-directed graph of the whole attack-path graph |
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
 | `/assets` | Asset inventory ranked by risk |
@@ -220,7 +221,7 @@ frontend/
 
 - Single shared API key; the web UI has no user login.
 - Only Trivy (dependency scanning) is supported; Semgrep (code) and container image scanning come next.
-- No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round). Failed scans show on `/scans` only, not as a warning on `/`.
+- No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round).
 - Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
 - Risk weights are hardcoded; no exploitability (EPSS/KEV) or asset-criticality input.
 - Local-dev defaults (Neo4j password, plaintext `.env`) are not production-ready.

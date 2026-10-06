@@ -740,6 +740,24 @@ def record_failed_scan(failure: ScanFailureIn):
     return {"scan_id": scan_id, "status": "failed"}
 
 
+@app.get("/scans/failing", dependencies=protected)
+def list_failing_scans():
+    query = """
+    MATCH (s:Scan)-[:SCANNED]->(repo:Repository)
+    WITH repo, s ORDER BY s.started_at DESC
+    WITH repo, s.scanner AS scanner, collect(s)[0] AS latest
+    WHERE latest.status = 'failed'
+    RETURN repo.name AS repository,
+           scanner,
+           latest.started_at AS failed_at,
+           latest.error AS error,
+           repo.last_scanned_at AS last_succeeded_at
+    ORDER BY failed_at DESC
+    """
+    with get_driver().session() as session:
+        return [record.data() for record in session.run(query)]
+
+
 @app.get("/scans", dependencies=protected)
 def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
     query = """

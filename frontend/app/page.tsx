@@ -2,6 +2,7 @@ import { ArrowRight, ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 
 import { RiskBadge } from "@/components/risk-badge";
+import { ScanWarning } from "@/components/scan-warning";
 import { StateCard } from "@/components/state-card";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiHeaders } from "@/lib/api";
-import { type Finding, findingHref, relativeTime } from "@/lib/findings";
+import { type FailingScan, type Finding, findingHref, relativeTime } from "@/lib/findings";
 import { SEVERITIES, type Severity, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
 
@@ -41,18 +42,32 @@ async function getFindings(status: string): Promise<Finding[]> {
   return res.json();
 }
 
+async function getFailingScans(): Promise<FailingScan[]> {
+  try {
+    const res = await fetch(`${API_URL}/scans/failing`, {
+      cache: "no-store",
+      headers: apiHeaders(),
+    });
+    return res.ok ? await res.json() : [];
+  } catch {
+    return [];
+  }
+}
+
 export default async function Home({ searchParams }: PageProps<"/">) {
   const { status: rawStatus } = await searchParams;
   const status =
     FILTERS.find((f) => f.value === rawStatus)?.value ?? FILTERS[0].value;
   let findings: Finding[] = [];
   let error: string | null = null;
+  const failingPromise = getFailingScans();
 
   try {
     findings = await getFindings(status);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
+  const failing = await failingPromise;
 
   findings.sort(
     (a, b) =>
@@ -91,6 +106,8 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
       )}
+
+      {!error && <ScanWarning failing={failing} />}
 
       {!error && (
         <nav className="animate-rise flex flex-wrap gap-3">

@@ -127,6 +127,14 @@ export interface Scan {
   skipped?: number;
 }
 
+export interface FailingScan {
+  repository: string;
+  scanner: string;
+  failed_at: string;
+  error?: string;
+  last_succeeded_at?: string;
+}
+
 export function findingHref(id: string): string {
   return `/findings/${encodeURIComponent(id)}`;
 }
