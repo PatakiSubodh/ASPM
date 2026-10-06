@@ -8,7 +8,11 @@ Application Security Posture Management: connects **vulnerable code** to the **p
 
 ```mermaid
 flowchart LR
-    scanner["Scanners<br/>(Trivy JSON, curl)"] -->|"POST /ingest/trivy<br/>POST /findings"| api
+    catalog["catalog.yaml"] -->|"read"| scanner
+    catalog -->|"loaded on startup"| api
+    github["Git repos"] -->|"git clone"| scanner
+    scanner["scanner<br/>git + Trivy (scheduled)"] -->|"POST /ingest/trivy<br/>POST /scans/failed"| api
+    manual["curl / CI"] -->|"POST /ingest/trivy<br/>POST /findings"| api
     browser["Browser"] -->|":3000"| web
     web["web<br/>Next.js 16 (App Router)"] -->|"server-side fetch<br/>X-API-Key"| api
     api["api<br/>FastAPI"] -->|"Bolt :7687"| db[("neo4j<br/>Neo4j 5 + APOC")]
@@ -19,6 +23,7 @@ flowchart LR
 | `neo4j` | Neo4j 5.24 community + APOC | 7474 (browser), 7687 (bolt) | Stores the attack-path graph; uniqueness constraints on every node key |
 | `api` | Python 3.12, FastAPI, neo4j driver | 8000 | Ingest, query, risk scoring, API-key auth |
 | `web` | Next.js 16, React 19, Tailwind v4, shadcn/ui, react-force-graph-2d | 3000 | Server-rendered UI; all data fetching happens on the Next.js server |
+| `scanner` | Python 3.12, git, Trivy 0.74 | — | Clones every catalog repository on a schedule, runs Trivy, posts each report as a scan run |
 
 ### Data model
 
@@ -39,7 +44,7 @@ flowchart LR
 
 ### Request flow
 
-1. A scanner report or a manual finding is `POST`ed to the API with an `X-API-Key` header.
+1. The `scanner` service (or any other client) `POST`s a scanner report or a manual finding to the API with an `X-API-Key` header.
 2. The API validates and normalizes it, then `MERGE`s it into Neo4j.
 3. A browser request hits the Next.js server, which calls the API server-side (the API key never reaches the browser) and renders the page.
 
@@ -77,7 +82,7 @@ docker compose up -d --build
 | http://localhost:8000/docs | API docs (Swagger); click **Authorize** and paste the key |
 | http://localhost:7474 | Neo4j browser (`neo4j` / `aspm_dev_password`) |
 
-Startup order is enforced by health checks: `neo4j` → `api` → `web`. On first start the API creates the constraints; the graph starts empty. To load sample data, see [`demo/README.md`](demo/README.md) (`docker compose --profile demo up -d`).
+Startup order is enforced by health checks: `neo4j` → `api` → `web` and `scanner`. The scanner scans every repository in `catalog.yaml` once on start, then every `SCAN_INTERVAL_MINUTES`. On first start the API creates the constraints; the graph starts empty. To load sample data, see [`demo/README.md`](demo/README.md) (`docker compose --profile demo up -d`).
 
 Stop with `docker compose down` (add `-v` to also delete the graph data).
 
@@ -89,6 +94,9 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 | `NEO4J_PASSWORD` | `aspm_dev_password` | `neo4j` (only applied when the data volume is first created), `api` |
 | `API_PORT` | `8000` | Host port for `api` |
 | `WEB_PORT` | `3000` | Host port for `web` |
+| `GITHUB_TOKEN` | *(empty)* | `scanner`: read-only token for private GitHub repositories (`contents: read`); never stored |
+| `SCAN_INTERVAL_MINUTES` | `360` | `scanner`: minutes between scan rounds |
+| `SCAN_ON_START` | `true` | `scanner`: scan immediately on start instead of waiting one interval |
 
 ## Local development (without containers for api/web)
 
@@ -116,6 +124,10 @@ ASPM_API_KEY=<same value as backend/.env>
 The API refuses to start without `ASPM_API_KEY`, and the web pages get a 401 if the two values differ.
 
 ## Getting data in
+
+Automatic: list a repository in `catalog.yaml`. The `scanner` service clones it (shallow, catalog `branch`), runs `trivy fs`, and posts the report with the commit SHA. A clone, scan or upload that fails is recorded as a failed scan run and never auto-resolves findings; other repositories keep scanning. The scanner reads the catalog every round; restart `api` so it picks up new asset mappings too.
+
+Manual:
 
 Ingest a single finding:
 
@@ -167,7 +179,8 @@ All routes except `/health` require `X-API-Key`.
 | `PATCH` | `/findings/{id}` | Set status: `open`, `in_progress`, `resolved`, `accepted_risk`, `false_positive` |
 | `GET` | `/assets` | Assets with open / in-progress vulnerability counts per severity and worst risk |
 | `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings` |
-| `GET` | `/scans` | Scan runs, newest first; `?repo=`, `?limit=` |
+| `GET` | `/scans` | Scan runs, newest first, with `status` (`succeeded` / `failed`); `?repo=`, `?limit=` |
+| `POST` | `/scans/failed` | Record a failed scan run (`repo_name`, `scanner`, `error`, optional `repo_url`, `commit`, `detail`); never resolves anything |
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
 | `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
 | `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
@@ -180,16 +193,19 @@ All routes except `/health` require `X-API-Key`.
 | `/graph` | Interactive force-directed graph of the whole attack-path graph |
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
 | `/assets` | Asset inventory ranked by risk |
-| `/scans` | Scan history with ingested / resolved / reopened counts |
+| `/scans` | Scan history with result (done / failed with reason) and ingested / resolved / reopened counts |
 | `/catalog` | Repositories, the assets each deploys to, and which are unmapped |
 
 ## Project layout
 
 ```
-docker-compose.yml     neo4j + api + web (+ demo-seed under the demo profile)
+docker-compose.yml     neo4j + api + web + scanner (+ demo-seed under the demo profile)
 .env.example           compose configuration
 catalog.yaml           repositories and the assets they deploy to
 demo/                  opt-in sample data: seed.cypher, purge.cypher, trivy-sample.json
+scanner/
+  run.py               scan loop: clone → Trivy → upload; records failures
+  Dockerfile           python:3.12-slim + git + Trivy binary
 backend/
   main.py              FastAPI app: models, auth, routes, risk scoring, Trivy connector
   Dockerfile
@@ -203,7 +219,8 @@ frontend/
 ## Current limitations
 
 - Single shared API key; the web UI has no user login.
-- Only Trivy is supported as a scanner connector, and reports are pushed manually.
+- Only Trivy (dependency scanning) is supported; Semgrep (code) and container image scanning come next.
+- No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round). Failed scans show on `/scans` only, not as a warning on `/`.
 - Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
 - Risk weights are hardcoded; no exploitability (EPSS/KEV) or asset-criticality input.
 - Local-dev defaults (Neo4j password, plaintext `.env`) are not production-ready.

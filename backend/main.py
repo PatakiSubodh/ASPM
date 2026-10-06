@@ -218,6 +218,20 @@ class StatusUpdate(BaseModel):
     status: FindingStatus
 
 
+class ScanFailureIn(BaseModel):
+    repo_name: str
+    repo_url: Optional[str] = None
+    scanner: str = Field(pattern="^[a-z0-9_-]+$")
+    commit: Optional[str] = None
+    error: str = Field(min_length=1, max_length=200)
+    detail: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("repo_name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -364,6 +378,7 @@ def run_scan(
             """
             MATCH (s:Scan {id: $scan_id})-[:SCANNED]->(repo:Repository)
             SET s.finished_at = $now,
+                s.status = 'succeeded',
                 s.ingested = $ingested,
                 s.resolved = $resolved,
                 s.reopened = $reopened,
@@ -692,6 +707,37 @@ def get_graph(status: str = ",".join(ACTIVE_STATUSES)):
                 links.append({"source": source, "target": target, "type": record["rel"]})
 
     return {"nodes": list(nodes.values()), "links": links}
+
+
+@app.post("/scans/failed", status_code=201, dependencies=protected)
+def record_failed_scan(failure: ScanFailureIn):
+    repository = RepositoryIn(name=failure.repo_name, url=failure.repo_url)
+    require_known_repository(repository)
+    scan_id = uuid4().hex
+    now = _now()
+    query = """
+    MERGE (repo:Repository {name: $repo.name})
+      ON CREATE SET repo.url = $repo.url
+    CREATE (s:Scan {id: $scan_id, scanner: $scanner, status: 'failed',
+                    started_at: $now, finished_at: $now, commit: $commit,
+                    error: $error, detail: $detail, partial: false,
+                    ingested: 0, resolved: 0, reopened: 0, skipped: 0})
+    MERGE (s)-[:SCANNED]->(repo)
+    """
+    with get_driver().session() as session:
+        session.execute_write(
+            lambda tx: tx.run(
+                query,
+                repo=repository.model_dump(),
+                scan_id=scan_id,
+                scanner=failure.scanner,
+                now=now,
+                commit=failure.commit,
+                error=failure.error,
+                detail=failure.detail,
+            ).consume()
+        )
+    return {"scan_id": scan_id, "status": "failed"}
 
 
 @app.get("/scans", dependencies=protected)

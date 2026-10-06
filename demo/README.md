@@ -15,7 +15,7 @@ Everything fake lives here. Nothing in `backend/` or `frontend/` creates sample 
 - `DEPLOYS_TO` edges (`source: 'demo'`) for the `/catalog` page; `POST /catalog` and the startup catalog load never prune them.
 - `acme-reports` has no deployed asset, so its Log4Shell finding is unmapped.
 - `acme-staging-gateway` is shared by `acme-payments` and `acme-storefront`.
-- 6 scan runs with ingested / resolved / reopened counts.
+- 7 scan runs with ingested / resolved / reopened counts: 6 succeeded, 1 failed (`acme-reports`, clone error).
 
 Keep `seed.cypher` in sync with the graph model: a model change and its seed change go in the same commit.
 

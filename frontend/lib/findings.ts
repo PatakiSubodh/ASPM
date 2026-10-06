@@ -114,6 +114,9 @@ export interface Scan {
   id: string;
   repository: string;
   scanner: string;
+  status?: "succeeded" | "failed";
+  error?: string;
+  detail?: string;
   commit?: string;
   partial?: boolean;
   started_at: string;

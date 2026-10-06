@@ -41,7 +41,9 @@ UNWIND [
   {id: 'demo-scan-storefront-1', repo: 'acme-storefront', scanner: 'trivy', commit: 'c2f81e0', started: 'PT5H', ingested: 3, resolved: 0, reopened: 1},
   {id: 'demo-scan-storefront-2', repo: 'acme-storefront', scanner: 'semgrep', commit: 'c2f81e0', started: 'PT5H', ingested: 1, resolved: 0, reopened: 0},
   {id: 'demo-scan-auth-1', repo: 'acme-auth', scanner: 'trivy', commit: '71aa04d', started: 'P1D', ingested: 3, resolved: 0, reopened: 0},
-  {id: 'demo-scan-reports-1', repo: 'acme-reports', scanner: 'trivy', commit: 'e5d2b19', started: 'P3D', ingested: 1, resolved: 0, reopened: 0}
+  {id: 'demo-scan-reports-1', repo: 'acme-reports', scanner: 'trivy', commit: 'e5d2b19', started: 'P3D', ingested: 1, resolved: 0, reopened: 0},
+  {id: 'demo-scan-reports-2', repo: 'acme-reports', scanner: 'trivy', started: 'PT1H', ingested: 0, resolved: 0, reopened: 0,
+   status: 'failed', error: "Couldn't clone the repository", detail: 'fatal: could not read Username for https://git.example.com'}
 ] AS s
 MATCH (repo:Repository {name: s.repo})
 MERGE (scan:Scan {id: s.id})
@@ -54,6 +56,9 @@ SET scan.scanner = s.scanner,
     scan.resolved = s.resolved,
     scan.reopened = s.reopened,
     scan.skipped = 0,
+    scan.status = coalesce(s.status, 'succeeded'),
+    scan.error = s.error,
+    scan.detail = s.detail,
     scan.demo = true
 MERGE (scan)-[:SCANNED]->(repo);
 

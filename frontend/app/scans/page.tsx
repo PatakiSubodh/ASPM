@@ -56,7 +56,7 @@ export default async function ScansPage() {
           .
         </h1>
         <p className="max-w-xl font-mono text-sm text-muted-foreground">
-          Every scan run, newest first. Each run auto-resolves what it no longer reports.
+          Every scan run, newest first. Each successful run auto-resolves what it no longer reports; a failed run changes nothing.
         </p>
       </section>
 
@@ -81,7 +81,7 @@ export default async function ScansPage() {
             <Table>
               <TableHeader className="bg-foreground">
                 <TableRow className="border-0 hover:bg-foreground">
-                  {["When", "Repository", "Scanner", "Commit", ...COUNTS.map((c) => c.label)].map(
+                  {["When", "Repository", "Scanner", "Result", "Commit", ...COUNTS.map((c) => c.label)].map(
                     (h) => (
                       <TableHead
                         key={h}
@@ -119,6 +119,22 @@ export default async function ScansPage() {
                           </span>
                         )}
                       </div>
+                    </TableCell>
+                    <TableCell className="max-w-64 whitespace-normal px-4 py-5 align-top">
+                      {scan.status === "failed" ? (
+                        <div title={scan.detail}>
+                          <Badge className="h-6 border-2 border-foreground bg-crit px-2 font-mono text-[11px] font-bold uppercase text-foreground shadow-brutal-sm">
+                            Failed
+                          </Badge>
+                          {scan.error && (
+                            <p className="mt-1 text-sm leading-snug text-muted-foreground">
+                              {scan.error}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="font-mono text-[11px] font-bold uppercase">Done</span>
+                      )}
                     </TableCell>
                     <TableCell className="px-4 py-5 align-top font-mono text-sm">
                       {scan.commit ? (

@@ -61,6 +61,23 @@ services:
       api:
         condition: service_healthy
 
+  scanner:
+    build: ./scanner
+    container_name: aspm-scanner
+    restart: unless-stopped
+    environment:
+      - ASPM_API_URL=http://api:8000
+      - ASPM_API_KEY=${ASPM_API_KEY:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - SCAN_INTERVAL_MINUTES=${SCAN_INTERVAL_MINUTES:-360}
+      - SCAN_ON_START=${SCAN_ON_START:-true}
+    volumes:
+      - ./catalog.yaml:/app/catalog.yaml:ro
+      - trivy_cache:/cache/trivy
+    depends_on:
+      api:
+        condition: service_healthy
+
   demo-seed:
     image: neo4j:5.24-community
     profiles: ["demo"]
@@ -77,3 +94,4 @@ volumes:
   neo4j_logs:
   neo4j_import:
   neo4j_plugins:
+  trivy_cache:
