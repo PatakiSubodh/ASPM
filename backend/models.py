@@ -77,7 +77,7 @@ class CatalogIn(BaseModel):
 
 
 
-class TrivyIngestParams(BaseModel):
+class IngestParams(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None
     repo_language: Optional[str] = None
@@ -126,3 +126,4 @@ class NormalizedFinding(BaseModel):
     installed_version: Optional[str] = None
     fixed_version: Optional[str] = None
     location: Optional[str] = None
+    cwe: Optional[list[str]] = None

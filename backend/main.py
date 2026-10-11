@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from neo4j import Driver
 
-from connectors import trivy
+from connectors import semgrep, trivy
 from db import close_driver, connect_driver, get_driver
 from ingest import _now, ingest_batch, require_known_repository, run_scan
 from models import (
@@ -31,10 +31,10 @@ from models import (
     AssetIn,
     CatalogIn,
     FindingIngest,
+    IngestParams,
     RepositoryIn,
     ScanFailureIn,
     StatusUpdate,
-    TrivyIngestParams,
     _normalize_key,
 )
 from risk import SEVERITIES, asset_risk
@@ -416,8 +416,9 @@ def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500))
         ]
 
 
-@app.post("/ingest/trivy", status_code=201, dependencies=protected)
-def ingest_trivy(report: trivy.TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
+def _ingest_scan(
+    params: IngestParams, scanner: str, type: str, parse, report
+) -> dict:
     repository = RepositoryIn(
         name=params.repo_name, url=params.repo_url, language=params.repo_language
     )
@@ -439,16 +440,26 @@ def ingest_trivy(report: trivy.TrivyReport, params: Annotated[TrivyIngestParams,
     )
     require_known_repository(repository)
 
-    findings, skipped = trivy.parse(report, repository.name)
+    findings, skipped = parse(report, repository.name)
 
     result = run_scan(
         repository,
         asset,
-        "trivy",
-        "sca",
+        scanner,
+        type,
         [f.model_dump() for f in findings],
         params.commit,
         params.partial,
         skipped,
     )
     return {**result, "ids": [f.id for f in findings]}
+
+
+@app.post("/ingest/trivy", status_code=201, dependencies=protected)
+def ingest_trivy(report: trivy.TrivyReport, params: Annotated[IngestParams, Query()]):
+    return _ingest_scan(params, "trivy", "sca", trivy.parse, report)
+
+
+@app.post("/ingest/semgrep", status_code=201, dependencies=protected)
+def ingest_semgrep(report: semgrep.SemgrepReport, params: Annotated[IngestParams, Query()]):
+    return _ingest_scan(params, "semgrep", "sast", semgrep.parse, report)
