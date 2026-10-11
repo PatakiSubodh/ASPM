@@ -21,9 +21,9 @@ flowchart LR
 | Service | Tech | Port | Role |
 |---|---|---|---|
 | `neo4j` | Neo4j 5.24 community + APOC | 7474 (browser), 7687 (bolt) | Stores the attack-path graph; uniqueness constraints on every node key |
-| `api` | Python 3.12, FastAPI, neo4j driver | 8000 | Ingest, query, risk scoring, API-key auth |
+| `api` | Python 3.14, FastAPI, neo4j driver | 8000 | Ingest, query, risk scoring, API-key auth |
 | `web` | Next.js 16, React 19, Tailwind v4, shadcn/ui, react-force-graph-2d | 3000 | Server-rendered UI; all data fetching happens on the Next.js server |
-| `scanner` | Python 3.12, git, Trivy 0.74 | — | Clones every catalog repository on a schedule, runs Trivy, posts each report as a scan run |
+| `scanner` | Python 3.14, git, Trivy 0.74 | — | Clones every catalog repository on a schedule, runs Trivy, posts each report as a scan run |
 
 ### Data model
 
@@ -98,30 +98,79 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 | `SCAN_INTERVAL_MINUTES` | `360` | `scanner`: minutes between scan rounds |
 | `SCAN_ON_START` | `true` | `scanner`: scan immediately on start instead of waiting one interval |
 
-## Local development (without containers for api/web)
+## Local development (recommended for coding)
+
+Neo4j runs in Docker; the API and the web app run on your machine with hot reload, so saved changes show up immediately. Use this instead of the full-Docker quick start while developing.
+
+### Prerequisites
+
+| Tool | Version | Check |
+|---|---|---|
+| Git | any recent | `git --version` |
+| Docker Desktop (engine running) | any recent | `docker run --rm hello-world` |
+| Python | 3.14 | `py -3.14 --version` |
+| Node.js / npm | latest LTS / latest | `node -v`, `npm -v` |
+
+### 1. Environment files (not in git, create them once)
+
+The same `ASPM_API_KEY` must be in all three files, otherwise the API returns 401 and the web pages show errors. Generate one with `python -c "import secrets;print(secrets.token_urlsafe(32))"`.
+
+| File | Create from | Set |
+|---|---|---|
+| `.env` | `cp .env.example .env` | `ASPM_API_KEY`; leave `NEO4J_PASSWORD` as is |
+| `backend/.env` | `cp backend/.env.example backend/.env` | `ASPM_API_KEY` (same value) |
+| `frontend/.env.local` | create by hand | `NEXT_PUBLIC_API_URL=http://localhost:8000` and `ASPM_API_KEY=<same value>` |
+
+(PowerShell: use `Copy-Item` instead of `cp`.)
+
+### 2. Run it (three terminals)
+
+**Terminal 1: database** (from the repo root; wait until `docker compose ps` shows `healthy`)
 
 ```bash
 docker compose up -d neo4j
+```
 
+**Terminal 2: backend** (http://localhost:8000/docs)
+
+```bash
 cd backend
-python -m venv venv && venv\Scripts\activate
+py -3.14 -m venv venv
+venv\Scripts\Activate.ps1      # PowerShell; Git Bash: source venv/Scripts/activate
 pip install -r requirements.txt
-cp .env.example .env
 uvicorn main:app --reload --port 8000
+```
 
+**Terminal 3: frontend** (http://localhost:3000)
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-`frontend/.env.local` needs:
+The API refuses to start without `ASPM_API_KEY`. If PowerShell blocks `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 
-```
-NEXT_PUBLIC_API_URL=http://localhost:8000
-ASPM_API_KEY=<same value as backend/.env>
-```
+### 3. Sample data and tests
 
-The API refuses to start without `ASPM_API_KEY`, and the web pages get a 401 if the two values differ.
+- The graph starts empty. Load sample data (needs the `.env` file from step 1): `docker compose run --rm demo-seed`. See [`demo/README.md`](demo/README.md).
+- Backend tests (Neo4j must be running, venv active): `pip install -r requirements-dev.txt && pytest` from `backend/`.
+- Frontend checks: `npm run lint` and `npm run build` from `frontend/`.
+- The `scanner` service is not needed here; add data with the demo seed or the `curl` examples below.
+
+### 4. Stop
+
+`Ctrl+C` in the backend and frontend terminals, then `docker compose down` (add `-v` to also delete the graph data).
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Web pages show 401 or fetch errors | `ASPM_API_KEY` differs between the three env files |
+| Backend cannot connect to Neo4j | Docker Desktop not running, or Neo4j not `healthy` yet |
+| `pip install` fails on a package | It has no Python 3.14 build at the pinned version; raise its version in `requirements.txt` |
+| Port 3000, 7474, 7687 or 8000 in use | Stop the other program, or change `API_PORT` / `WEB_PORT` |
+| Neo4j login fails after changing `NEO4J_PASSWORD` | The password applies only on first volume creation; run `docker compose down -v` and start again |
 
 ## Getting data in
 
@@ -206,7 +255,7 @@ catalog.yaml           repositories and the assets they deploy to
 demo/                  opt-in sample data: seed.cypher, purge.cypher, trivy-sample.json
 scanner/
   run.py               scan loop: clone → Trivy → upload; records failures
-  Dockerfile           python:3.12-slim + git + Trivy binary
+  Dockerfile           python:3.14-slim + git + Trivy binary
 backend/
   main.py              FastAPI app: models, auth, routes, risk scoring, Trivy connector
   Dockerfile
