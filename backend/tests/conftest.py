@@ -8,6 +8,7 @@ import pytest
 os.environ.setdefault("ASPM_API_KEY", "pytest-key")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import db
 import main
 from fastapi.testclient import TestClient
 from neo4j import GraphDatabase
@@ -16,11 +17,11 @@ from neo4j.exceptions import ServiceUnavailable
 
 @pytest.fixture(scope="session")
 def client():
-    probe = GraphDatabase.driver(main.NEO4J_URI, auth=(main.NEO4J_USER, main.NEO4J_PASSWORD))
+    probe = GraphDatabase.driver(db.NEO4J_URI, auth=(db.NEO4J_USER, db.NEO4J_PASSWORD))
     try:
         probe.verify_connectivity()
     except (ServiceUnavailable, OSError):
-        pytest.skip(f"Neo4j not reachable at {main.NEO4J_URI}")
+        pytest.skip(f"Neo4j not reachable at {db.NEO4J_URI}")
     finally:
         probe.close()
     with TestClient(main.app, headers={"X-API-Key": main.ASPM_API_KEY}) as c:

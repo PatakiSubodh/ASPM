@@ -11,9 +11,8 @@ exposed by which vulnerable code, and where did that vulnerability come from?"
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Optional
 from uuid import uuid4
 
 import yaml
@@ -21,59 +20,38 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
-from neo4j import GraphDatabase, Driver
-from pydantic import BaseModel, Field, field_validator, model_validator
+from neo4j import Driver
+
+from connectors import trivy
+from db import close_driver, connect_driver, get_driver
+from ingest import _now, ingest_batch, require_known_repository, run_scan
+from models import (
+    ACTIVE_STATUSES,
+    STATUSES,
+    AssetIn,
+    CatalogIn,
+    FindingIngest,
+    RepositoryIn,
+    ScanFailureIn,
+    StatusUpdate,
+    TrivyIngestParams,
+    _normalize_key,
+)
+from risk import SEVERITIES, asset_risk
 
 load_dotenv()
 
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "aspm_dev_password")
 ASPM_API_KEY = os.getenv("ASPM_API_KEY", "")
 CATALOG_PATH = os.getenv("CATALOG_PATH", "/app/catalog.yaml")
-
-driver: Optional[Driver] = None
-
-
-# ---------------------------------------------------------------------------
-# Neo4j connection lifecycle
-# ---------------------------------------------------------------------------
-
-def get_driver() -> Driver:
-    if driver is None:
-        raise HTTPException(status_code=503, detail="Neo4j driver not initialized")
-    return driver
-
-
-CONSTRAINTS = [
-    "CREATE CONSTRAINT repository_name_unique IF NOT EXISTS "
-    "FOR (r:Repository) REQUIRE r.name IS UNIQUE",
-    "CREATE CONSTRAINT vulnerability_id_unique IF NOT EXISTS "
-    "FOR (v:Vulnerability) REQUIRE v.id IS UNIQUE",
-    "CREATE CONSTRAINT asset_name_unique IF NOT EXISTS "
-    "FOR (a:Asset) REQUIRE a.name IS UNIQUE",
-    "CREATE CONSTRAINT scan_id_unique IF NOT EXISTS "
-    "FOR (s:Scan) REQUIRE s.id IS UNIQUE",
-]
-
-
-def ensure_constraints(db: Driver) -> None:
-    with db.session() as session:
-        for statement in CONSTRAINTS:
-            session.run(statement).consume()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global driver
     if not ASPM_API_KEY:
         raise RuntimeError("ASPM_API_KEY is not set")
-    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-    driver.verify_connectivity()
-    ensure_constraints(driver)
-    load_catalog_file(driver)
+    load_catalog_file(connect_driver())
     yield
-    driver.close()
+    close_driver()
 
 
 app = FastAPI(title="ASPM Backend", lifespan=lifespan)
@@ -97,145 +75,6 @@ def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
 protected = [Depends(require_api_key)]
 
 
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
-def _normalize_key(value: str) -> str:
-    value = " ".join(value.split())
-    if not value:
-        raise ValueError("must not be blank")
-    return value
-
-
-class RepositoryIn(BaseModel):
-    name: str
-    url: Optional[str] = None
-    language: Optional[str] = None
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, v: str) -> str:
-        return _normalize_key(v).lower()
-
-
-class VulnerabilityIn(BaseModel):
-    id: str
-    cve: Optional[str] = None
-    severity: str = Field(pattern="^(LOW|MEDIUM|HIGH|CRITICAL)$")
-    description: str
-
-    @field_validator("id")
-    @classmethod
-    def normalize_id(cls, v: str) -> str:
-        return _normalize_key(v).upper()
-
-
-class AssetIn(BaseModel):
-    name: str
-    environment: str
-    type: str
-    internet_facing: bool = False
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, v: str) -> str:
-        return _normalize_key(v).lower()
-
-
-class FindingIngest(BaseModel):
-    repository: RepositoryIn
-    vulnerability: VulnerabilityIn
-    asset: Optional[AssetIn] = None
-
-
-class CatalogRepository(BaseModel):
-    name: str
-    url: str
-    language: Optional[str] = None
-    branch: Optional[str] = None
-    assets: list[AssetIn] = []
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, v: str) -> str:
-        return _normalize_key(v).lower()
-
-
-class CatalogIn(BaseModel):
-    repositories: list[CatalogRepository] = []
-
-    @model_validator(mode="after")
-    def unique_repositories(self) -> "CatalogIn":
-        names = [r.name for r in self.repositories]
-        duplicates = sorted({n for n in names if names.count(n) > 1})
-        if duplicates:
-            raise ValueError(f"duplicate repositories: {', '.join(duplicates)}")
-        return self
-
-
-class TrivyVulnerability(BaseModel):
-    VulnerabilityID: str
-    PkgName: str
-    InstalledVersion: str = ""
-    FixedVersion: Optional[str] = None
-    Severity: str
-    Title: Optional[str] = None
-    Description: Optional[str] = None
-
-
-class TrivyResult(BaseModel):
-    Target: str
-    Vulnerabilities: Optional[list[TrivyVulnerability]] = None
-
-
-class TrivyReport(BaseModel):
-    Results: Optional[list[TrivyResult]] = None
-
-
-class TrivyIngestParams(BaseModel):
-    repo_name: str
-    repo_url: Optional[str] = None
-    repo_language: Optional[str] = None
-    asset_name: Optional[str] = None
-    asset_environment: Optional[str] = None
-    asset_type: Optional[str] = None
-    asset_internet_facing: bool = False
-    commit: Optional[str] = None
-    partial: bool = False
-
-    @field_validator("repo_name", "asset_name")
-    @classmethod
-    def normalize_name(cls, v: str) -> str:
-        return _normalize_key(v).lower()
-
-
-FindingStatus = Literal["open", "in_progress", "resolved", "accepted_risk", "false_positive"]
-STATUSES: tuple[str, ...] = FindingStatus.__args__
-ACTIVE_STATUSES = ["open", "in_progress"]
-
-
-class StatusUpdate(BaseModel):
-    status: FindingStatus
-
-
-class ScanFailureIn(BaseModel):
-    repo_name: str
-    repo_url: Optional[str] = None
-    scanner: str = Field(pattern="^[a-z0-9_-]+$")
-    commit: Optional[str] = None
-    error: str = Field(min_length=1, max_length=200)
-    detail: Optional[str] = Field(default=None, max_length=500)
-
-    @field_validator("repo_name")
-    @classmethod
-    def normalize_name(cls, v: str) -> str:
-        return _normalize_key(v).lower()
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _parse_statuses(status: str) -> Optional[list[str]]:
     if status.strip().lower() == "all":
         return None
@@ -253,164 +92,6 @@ def _parse_statuses(status: str) -> Optional[list[str]]:
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-ASSET_UPSERT_QUERY = """
-MERGE (asset:Asset {name: $asset.name})
-  ON CREATE SET
-    asset.environment = $asset.environment,
-    asset.type = $asset.type,
-    asset.internet_facing = $asset.internet_facing
-"""
-
-INGEST_BATCH_QUERY = """
-MERGE (repo:Repository {name: $repo.name})
-  ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
-WITH repo
-OPTIONAL MATCH (explicit:Asset {name: $asset_name})
-UNWIND $findings AS f
-MERGE (vuln:Vulnerability {id: f.id})
-  ON CREATE SET vuln.status = 'open', vuln.first_seen = $now
-WITH repo, explicit, f, vuln, vuln.status = 'resolved' AS reopened
-SET vuln.cve = f.cve,
-    vuln.severity = f.severity,
-    vuln.description = f.description,
-    vuln.package = f.package,
-    vuln.installed_version = f.installed_version,
-    vuln.fixed_version = f.fixed_version,
-    vuln.location = f.location,
-    vuln.scanner = $scanner,
-    vuln.type = $type,
-    vuln.last_seen = $now,
-    vuln.last_scan_id = $scan_id,
-    vuln.status = CASE WHEN reopened THEN 'open' ELSE vuln.status END,
-    vuln.reopened_at = CASE WHEN reopened THEN $now ELSE vuln.reopened_at END,
-    vuln.resolved_at = CASE WHEN reopened THEN null ELSE vuln.resolved_at END
-MERGE (repo)-[:CONTAINS]->(vuln)
-WITH repo, explicit, vuln, reopened
-CALL (vuln, explicit) {
-  WITH vuln, explicit WHERE explicit IS NOT NULL
-  MERGE (vuln)-[affects:AFFECTS]->(explicit)
-  SET affects.source = 'ingest'
-}
-CALL (repo, vuln) {
-  MATCH (repo)-[:DEPLOYS_TO]->(deployed:Asset)
-  MERGE (vuln)-[affects:AFFECTS]->(deployed)
-    ON CREATE SET affects.source = 'catalog'
-}
-RETURN count(vuln) AS ingested, sum(CASE WHEN reopened THEN 1 ELSE 0 END) AS reopened
-"""
-
-AUTO_RESOLVE_QUERY = """
-MATCH (:Repository {name: $repo})-[:CONTAINS]->(v:Vulnerability {scanner: $scanner})
-WHERE v.status IN ['open', 'in_progress'] AND v.last_scan_id <> $scan_id
-SET v.status = 'resolved', v.resolved_at = $now
-RETURN count(v) AS resolved
-"""
-
-
-def ingest_batch(
-    tx,
-    repo: RepositoryIn,
-    asset: Optional[AssetIn],
-    scanner: str,
-    scan_id: Optional[str],
-    findings: list[dict],
-    now: str,
-    type: Optional[str] = None,
-) -> dict:
-    if asset is not None:
-        tx.run(ASSET_UPSERT_QUERY, asset=asset.model_dump()).consume()
-    record = tx.run(
-        INGEST_BATCH_QUERY,
-        repo=repo.model_dump(),
-        asset_name=asset.name if asset else None,
-        scanner=scanner,
-        scan_id=scan_id,
-        type=type,
-        findings=findings,
-        now=now,
-    ).single()
-    return {"ingested": record["ingested"], "reopened": record["reopened"]}
-
-
-def run_scan(
-    repo: RepositoryIn,
-    asset: Optional[AssetIn],
-    scanner: str,
-    type: str,
-    findings: list[dict],
-    commit: Optional[str],
-    partial: bool,
-    skipped: int,
-) -> dict:
-    scan_id = uuid4().hex
-    started_at = _now()
-
-    def work(tx) -> dict:
-        tx.run(
-            """
-            MERGE (repo:Repository {name: $repo.name})
-              ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
-            CREATE (s:Scan {id: $scan_id, scanner: $scanner, started_at: $now,
-                            commit: $commit, partial: $partial})
-            MERGE (s)-[:SCANNED]->(repo)
-            """,
-            repo=repo.model_dump(),
-            scan_id=scan_id,
-            scanner=scanner,
-            now=started_at,
-            commit=commit,
-            partial=partial,
-        ).consume()
-        counts = ingest_batch(tx, repo, asset, scanner, scan_id, findings, started_at, type)
-        resolved = 0
-        if not partial:
-            resolved = tx.run(
-                AUTO_RESOLVE_QUERY,
-                repo=repo.name,
-                scanner=scanner,
-                scan_id=scan_id,
-                now=started_at,
-            ).single()["resolved"]
-        finished_at = _now()
-        tx.run(
-            """
-            MATCH (s:Scan {id: $scan_id})-[:SCANNED]->(repo:Repository)
-            SET s.finished_at = $now,
-                s.status = 'succeeded',
-                s.ingested = $ingested,
-                s.resolved = $resolved,
-                s.reopened = $reopened,
-                s.skipped = $skipped,
-                repo.last_scanned_at = $now
-            """,
-            scan_id=scan_id,
-            now=finished_at,
-            ingested=counts["ingested"],
-            resolved=resolved,
-            reopened=counts["reopened"],
-            skipped=skipped,
-        ).consume()
-        return {"scan_id": scan_id, **counts, "resolved": resolved, "skipped": skipped}
-
-    with get_driver().session() as session:
-        return session.execute_write(work)
-
-
-def require_known_repository(repo: RepositoryIn) -> None:
-    if repo.url:
-        return
-    with get_driver().session() as session:
-        exists = session.run(
-            "MATCH (r:Repository {name: $name}) RETURN count(r) > 0 AS exists",
-            name=repo.name,
-        ).single()["exists"]
-    if not exists:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown repository '{repo.name}': add it to the catalog or pass its url",
-        )
 
 
 CATALOG_UPSERT_QUERY = """
@@ -610,49 +291,6 @@ def get_finding(finding_id: str):
     }
 
 
-SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
-
-SEVERITY_WEIGHT = {"CRITICAL": 10, "HIGH": 7, "MEDIUM": 4, "LOW": 1}
-ENVIRONMENT_WEIGHT = {
-    "production": 1.0,
-    "prod": 1.0,
-    "staging": 0.6,
-    "stage": 0.6,
-    "uat": 0.6,
-    "qa": 0.6,
-    "development": 0.3,
-    "dev": 0.3,
-    "test": 0.3,
-}
-DEFAULT_ENVIRONMENT_WEIGHT = 0.6
-INTERNET_FACING_WEIGHT = 1.5
-MAX_RISK = SEVERITY_WEIGHT["CRITICAL"] * ENVIRONMENT_WEIGHT["production"] * INTERNET_FACING_WEIGHT
-PRIORITY_BANDS = ((70, "P1"), (40, "P2"), (20, "P3"), (0, "P4"))
-
-
-def risk_score(severity: str, environment: Optional[str], internet_facing: bool) -> dict:
-    severity_weight = SEVERITY_WEIGHT.get(severity, SEVERITY_WEIGHT["LOW"])
-    environment_weight = ENVIRONMENT_WEIGHT.get(
-        (environment or "").strip().lower(), DEFAULT_ENVIRONMENT_WEIGHT
-    )
-    exposure_weight = INTERNET_FACING_WEIGHT if internet_facing else 1.0
-    score = min(100, round(severity_weight * environment_weight * exposure_weight / MAX_RISK * 100))
-    priority = next(p for threshold, p in PRIORITY_BANDS if score >= threshold)
-    return {
-        "score": score,
-        "priority": priority,
-        "factors": {
-            "severity": severity_weight,
-            "environment": environment_weight,
-            "exposure": exposure_weight,
-        },
-    }
-
-
-def asset_risk(severity: str, asset: dict) -> dict:
-    return risk_score(severity, asset.get("environment"), bool(asset.get("internet_facing")))
-
-
 @app.get("/assets", dependencies=protected)
 def list_assets():
     query = """
@@ -778,14 +416,8 @@ def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500))
         ]
 
 
-def _trivy_description(vuln: TrivyVulnerability, target: str) -> str:
-    title = vuln.Title or vuln.Description or vuln.VulnerabilityID
-    fix = f"fixed in {vuln.FixedVersion}" if vuln.FixedVersion else "no fix available"
-    return f"{title} ({vuln.PkgName} {vuln.InstalledVersion}, {fix}; {target})"
-
-
 @app.post("/ingest/trivy", status_code=201, dependencies=protected)
-def ingest_trivy(report: TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
+def ingest_trivy(report: trivy.TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
     repository = RepositoryIn(
         name=params.repo_name, url=params.repo_url, language=params.repo_language
     )
@@ -807,33 +439,16 @@ def ingest_trivy(report: TrivyReport, params: Annotated[TrivyIngestParams, Query
     )
     require_known_repository(repository)
 
-    findings: dict[str, dict] = {}
-    skipped = 0
-    for result in report.Results or []:
-        for vuln in result.Vulnerabilities or []:
-            if vuln.Severity not in SEVERITIES:
-                skipped += 1
-                continue
-            vuln_id = _normalize_key(f"{repository.name}:{vuln.PkgName}:{vuln.VulnerabilityID}").upper()
-            findings[vuln_id] = {
-                "id": vuln_id,
-                "cve": vuln.VulnerabilityID if vuln.VulnerabilityID.upper().startswith("CVE-") else None,
-                "severity": vuln.Severity,
-                "description": _trivy_description(vuln, result.Target),
-                "package": vuln.PkgName,
-                "installed_version": vuln.InstalledVersion,
-                "fixed_version": vuln.FixedVersion,
-                "location": result.Target,
-            }
+    findings, skipped = trivy.parse(report, repository.name)
 
     result = run_scan(
         repository,
         asset,
         "trivy",
         "sca",
-        list(findings.values()),
+        [f.model_dump() for f in findings],
         params.commit,
         params.partial,
         skipped,
     )
-    return {**result, "ids": list(findings)}
+    return {**result, "ids": [f.id for f in findings]}
