@@ -16,6 +16,7 @@ import {
   relativeTime,
   STATUSES,
   statusLabel,
+  typeLabel,
   type Vulnerability,
 } from "@/lib/findings";
 import { severityBg } from "@/lib/graph";
@@ -169,8 +170,10 @@ function StatusCard({ vuln }: { vuln: Vulnerability }) {
     ["First seen", relativeTime(vuln.first_seen)],
     ["Last seen", relativeTime(vuln.last_seen)],
     ["Scanner", vuln.scanner ?? "—"],
+    ["Type", vuln.type ? (typeLabel[vuln.type] ?? vuln.type) : "—"],
     ["Location", vuln.location ?? "—"],
   ];
+  if (vuln.cwe?.length) meta.push(["CWE", vuln.cwe.join(", ")]);
   if (vuln.resolved_at) meta.push(["Resolved", relativeTime(vuln.resolved_at)]);
   if (vuln.reopened_at) meta.push(["Reopened", relativeTime(vuln.reopened_at)]);
 

@@ -39,6 +39,12 @@ export const statusLabel: Record<FindingStatus, string> = {
   false_positive: "False positive",
 };
 
+export const typeLabel: Record<string, string> = {
+  sca: "SCA",
+  sast: "SAST",
+  container: "Container",
+};
+
 export const statusClass: Record<FindingStatus, string> = {
   open: "bg-foreground text-background",
   in_progress: "bg-acid text-foreground",
@@ -67,6 +73,7 @@ export interface Vulnerability {
   installed_version?: string;
   fixed_version?: string;
   location?: string;
+  cwe?: string[];
   first_seen?: string;
   last_seen?: string;
   resolved_at?: string;
