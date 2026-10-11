@@ -1,6 +1,6 @@
 FROM aquasec/trivy:0.74.0 AS trivy
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
