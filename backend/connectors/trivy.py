@@ -22,6 +22,7 @@ class TrivyResult(BaseModel):
 
 
 class TrivyReport(BaseModel):
+    ArtifactName: Optional[str] = None
     Results: Optional[list[TrivyResult]] = None
 
 
@@ -31,7 +32,7 @@ def _trivy_description(vuln: TrivyVulnerability, target: str) -> str:
     return f"{title} ({vuln.PkgName} {vuln.InstalledVersion}, {fix}; {target})"
 
 
-def parse(report: TrivyReport, repo_name: str) -> tuple[list[NormalizedFinding], int]:
+def parse(report: TrivyReport, id_prefix: str) -> tuple[list[NormalizedFinding], int]:
     findings: dict[str, NormalizedFinding] = {}
     skipped = 0
     for result in report.Results or []:
@@ -39,7 +40,7 @@ def parse(report: TrivyReport, repo_name: str) -> tuple[list[NormalizedFinding],
             if vuln.Severity not in SEVERITIES:
                 skipped += 1
                 continue
-            vuln_id = _normalize_key(f"{repo_name}:{vuln.PkgName}:{vuln.VulnerabilityID}").upper()
+            vuln_id = _normalize_key(f"{id_prefix}:{vuln.PkgName}:{vuln.VulnerabilityID}").upper()
             findings[vuln_id] = NormalizedFinding(
                 id=vuln_id,
                 cve=vuln.VulnerabilityID if vuln.VulnerabilityID.upper().startswith("CVE-") else None,

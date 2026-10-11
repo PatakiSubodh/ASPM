@@ -17,7 +17,8 @@ MERGE (asset:Asset {name: $asset.name})
   ON CREATE SET
     asset.environment = $asset.environment,
     asset.type = $asset.type,
-    asset.internet_facing = $asset.internet_facing
+    asset.internet_facing = $asset.internet_facing,
+    asset.image = $asset.image
 """
 
 INGEST_BATCH_QUERY = """
@@ -53,6 +54,7 @@ CALL (vuln, explicit) {
 }
 CALL (repo, vuln) {
   MATCH (repo)-[:DEPLOYS_TO]->(deployed:Asset)
+  WHERE $link_deployed
   MERGE (vuln)-[affects:AFFECTS]->(deployed)
     ON CREATE SET affects.source = 'catalog'
 }
@@ -62,6 +64,7 @@ RETURN count(vuln) AS ingested, sum(CASE WHEN reopened THEN 1 ELSE 0 END) AS reo
 AUTO_RESOLVE_QUERY = """
 MATCH (:Repository {name: $repo})-[:CONTAINS]->(v:Vulnerability {scanner: $scanner})
 WHERE v.status IN ['open', 'in_progress'] AND v.last_scan_id <> $scan_id
+  AND ($asset IS NULL OR EXISTS { (v)-[:AFFECTS]->(:Asset {name: $asset}) })
 SET v.status = 'resolved', v.resolved_at = $now
 RETURN count(v) AS resolved
 """
@@ -76,6 +79,7 @@ def ingest_batch(
     findings: list[dict],
     now: str,
     type: Optional[str] = None,
+    link_deployed: bool = True,
 ) -> dict:
     if asset is not None:
         tx.run(ASSET_UPSERT_QUERY, asset=asset.model_dump()).consume()
@@ -88,6 +92,7 @@ def ingest_batch(
         type=type,
         findings=findings,
         now=now,
+        link_deployed=link_deployed,
     ).single()
     return {"ingested": record["ingested"], "reopened": record["reopened"]}
 
@@ -101,6 +106,7 @@ def run_scan(
     commit: Optional[str],
     partial: bool,
     skipped: int,
+    image: bool = False,
 ) -> dict:
     scan_id = uuid4().hex
     started_at = _now()
@@ -121,7 +127,9 @@ def run_scan(
             commit=commit,
             partial=partial,
         ).consume()
-        counts = ingest_batch(tx, repo, asset, scanner, scan_id, findings, started_at, type)
+        counts = ingest_batch(
+            tx, repo, asset, scanner, scan_id, findings, started_at, type, not image
+        )
         resolved = 0
         if not partial:
             resolved = tx.run(
@@ -130,6 +138,7 @@ def run_scan(
                 scanner=scanner,
                 scan_id=scan_id,
                 now=started_at,
+                asset=asset.name if image and asset else None,
             ).single()["resolved"]
         finished_at = _now()
         tx.run(

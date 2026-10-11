@@ -32,6 +32,7 @@ from models import (
     CatalogIn,
     FindingIngest,
     IngestParams,
+    TrivyIngestParams,
     RepositoryIn,
     ScanFailureIn,
     StatusUpdate,
@@ -106,6 +107,7 @@ MERGE (asset:Asset {name: a.name})
 SET asset.environment = a.environment,
     asset.type = a.type,
     asset.internet_facing = a.internet_facing,
+    asset.image = a.image,
     asset.source = 'catalog'
 MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
   ON CREATE SET deploys.source = 'catalog'
@@ -416,31 +418,58 @@ def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500))
         ]
 
 
+def _load_image_asset(params: IngestParams, report: trivy.TrivyReport) -> AssetIn:
+    if not params.asset_name:
+        raise HTTPException(status_code=422, detail="asset_name is required in image mode")
+    with get_driver().session() as session:
+        record = session.run(
+            "MATCH (a:Asset {name: $name}) RETURN a { .* } AS asset", name=params.asset_name
+        ).single()
+    if record is None:
+        raise HTTPException(status_code=422, detail=f"Unknown asset '{params.asset_name}'")
+    node = record["asset"]
+    if not node.get("image"):
+        raise HTTPException(
+            status_code=422, detail=f"Asset '{params.asset_name}' has no image in the catalog"
+        )
+    if report.ArtifactName != node["image"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Report is for '{report.ArtifactName}', asset image is '{node['image']}'",
+        )
+    return AssetIn(**node)
+
+
 def _ingest_scan(
-    params: IngestParams, scanner: str, type: str, parse, report
+    params: IngestParams, scanner: str, type: str, parse, report, image: bool = False
 ) -> dict:
     repository = RepositoryIn(
         name=params.repo_name, url=params.repo_url, language=params.repo_language
     )
-    asset_fields = (params.asset_name, params.asset_environment, params.asset_type)
-    if any(asset_fields) and not all(asset_fields):
-        raise HTTPException(
-            status_code=422,
-            detail="asset_name, asset_environment and asset_type must be given together",
-        )
-    asset = (
-        AssetIn(
-            name=params.asset_name,
-            environment=params.asset_environment,
-            type=params.asset_type,
-            internet_facing=params.asset_internet_facing,
-        )
-        if params.asset_name
-        else None
-    )
     require_known_repository(repository)
+    if image:
+        asset = _load_image_asset(params, report)
+        id_prefix = f"{repository.name}:{asset.name}:image"
+    else:
+        asset_fields = (params.asset_name, params.asset_environment, params.asset_type)
+        if any(asset_fields) and not all(asset_fields):
+            raise HTTPException(
+                status_code=422,
+                detail="asset_name, asset_environment and asset_type must be given together",
+            )
+        asset = (
+            AssetIn(
+                name=params.asset_name,
+                environment=params.asset_environment,
+                type=params.asset_type,
+                internet_facing=params.asset_internet_facing,
+            )
+            if params.asset_name
+            else None
+        )
+        id_prefix = repository.name
 
-    findings, skipped = parse(report, repository.name)
+    findings, skipped = parse(report, id_prefix)
 
     result = run_scan(
         repository,
@@ -451,12 +480,15 @@ def _ingest_scan(
         params.commit,
         params.partial,
         skipped,
+        image,
     )
     return {**result, "ids": [f.id for f in findings]}
 
 
 @app.post("/ingest/trivy", status_code=201, dependencies=protected)
-def ingest_trivy(report: trivy.TrivyReport, params: Annotated[IngestParams, Query()]):
+def ingest_trivy(report: trivy.TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
+    if params.mode == "image":
+        return _ingest_scan(params, "trivy-image", "container", trivy.parse, report, True)
     return _ingest_scan(params, "trivy", "sca", trivy.parse, report)
 
 

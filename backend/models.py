@@ -38,6 +38,7 @@ class AssetIn(BaseModel):
     environment: str
     type: str
     internet_facing: bool = False
+    image: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -92,6 +93,10 @@ class IngestParams(BaseModel):
     @classmethod
     def normalize_name(cls, v: str) -> str:
         return _normalize_key(v).lower()
+
+
+class TrivyIngestParams(IngestParams):
+    mode: Literal["fs", "image"] = "fs"
 
 
 FindingStatus = Literal["open", "in_progress", "resolved", "accepted_risk", "false_positive"]
