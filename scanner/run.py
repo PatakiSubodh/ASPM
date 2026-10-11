@@ -88,8 +88,15 @@ def checkout(repo: dict, path: Path) -> str:
     return run(["git", "-C", str(path), "rev-parse", "HEAD"], "Couldn't read the commit", 60).strip()
 
 
-def upload(client: httpx.Client, repo: dict, scanner: str, commit: str, report: str) -> None:
-    params = {"repo_name": repo["name"], "repo_url": repo["url"], "commit": commit}
+def upload(
+    client: httpx.Client,
+    repo: dict,
+    scanner: str,
+    commit: str,
+    report: str,
+    extra: Optional[dict] = None,
+) -> None:
+    params = {"repo_name": repo["name"], "repo_url": repo["url"], "commit": commit, **(extra or {})}
     if repo.get("language"):
         params["repo_language"] = repo["language"]
     try:
@@ -146,6 +153,24 @@ def scan_repository(client: httpx.Client, repo: dict) -> None:
                 upload(client, repo, scanner, commit, report)
             except ScanError as failure:
                 record_failure(client, repo, scanner, commit, failure)
+        for asset in repo.get("assets") or []:
+            if not asset.get("image") or not asset.get("name"):
+                continue
+            try:
+                report = run(
+                    [
+                        "trivy", "image", "--scanners", "vuln", "--format", "json",
+                        "--quiet", str(asset["image"]),
+                    ],
+                    "Trivy image scan failed",
+                    SCAN_TIMEOUT,
+                )
+                upload(
+                    client, repo, "trivy", commit, report,
+                    {"mode": "image", "asset_name": asset["name"]},
+                )
+            except ScanError as failure:
+                record_failure(client, repo, "trivy-image", commit, failure)
     finally:
         shutil.rmtree(path, ignore_errors=True)
 
