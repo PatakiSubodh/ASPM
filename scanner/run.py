@@ -27,6 +27,14 @@ SCANNERS = {
             "trivy", "fs", "--scanners", "vuln", "--format", "json", "--quiet", str(path),
         ],
     },
+    "semgrep": {
+        "label": "Semgrep",
+        "command": lambda path: [
+            "semgrep", "scan", "--config", "p/default", "--metrics", "off",
+            "--disable-version-check", "--json", "--quiet", ".",
+        ],
+        "cwd": True,
+    },
 }
 
 
@@ -46,13 +54,14 @@ def last_line(text: str) -> Optional[str]:
     return redact(lines[-1])[:500] if lines else None
 
 
-def run(command: list[str], error: str, timeout: int) -> str:
+def run(command: list[str], error: str, timeout: int, cwd: Optional[Path] = None) -> str:
     try:
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
             env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         )
     except subprocess.TimeoutExpired:
@@ -128,7 +137,12 @@ def scan_repository(client: httpx.Client, repo: dict) -> None:
             return
         for scanner, spec in SCANNERS.items():
             try:
-                report = run(spec["command"](path), f"{spec['label']} scan failed", SCAN_TIMEOUT)
+                report = run(
+                    spec["command"](path),
+                    f"{spec['label']} scan failed",
+                    SCAN_TIMEOUT,
+                    path if spec.get("cwd") else None,
+                )
                 upload(client, repo, scanner, commit, report)
             except ScanError as failure:
                 record_failure(client, repo, scanner, commit, failure)
