@@ -30,6 +30,7 @@ from models import (
     STATUSES,
     AssetIn,
     CatalogIn,
+    DiscoveryIn,
     FindingIngest,
     IngestParams,
     TrivyIngestParams,
@@ -183,6 +184,74 @@ def get_catalog():
             }
             for record in session.run(query, statuses=ACTIVE_STATUSES)
         ]
+
+
+DISCOVERY_UPSERT_QUERY = """
+UNWIND $assets AS a
+MERGE (asset:Asset {name: a.name})
+SET asset.environment = a.environment,
+    asset.type = 'Docker container',
+    asset.internet_facing = a.internet_facing,
+    asset.image = coalesce(asset.image, a.image),
+    asset.source = $source,
+    asset.last_discovered_at = $now
+WITH asset, a
+CALL (asset, a) {
+  MATCH (repo:Repository {name: a.repository})
+  MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
+    ON CREATE SET deploys.source = $source
+}
+"""
+
+DISCOVERY_BACKFILL_QUERY = """
+UNWIND $assets AS a
+MATCH (repo:Repository {name: a.repository})-[:DEPLOYS_TO]->(asset:Asset {name: a.name})
+MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
+MERGE (vuln)-[affects:AFFECTS]->(asset)
+  ON CREATE SET affects.source = 'catalog'
+"""
+
+
+def _normalize_url(url: str) -> str:
+    return url.strip().lower().rstrip("/").removesuffix(".git")
+
+
+def apply_discovery(tx, discovery: DiscoveryIn, now: str) -> dict:
+    repos = {
+        _normalize_url(record["url"]): record["name"]
+        for record in tx.run(
+            "MATCH (r:Repository) WHERE r.url IS NOT NULL RETURN r.name AS name, r.url AS url"
+        )
+    }
+    assets = []
+    for a in discovery.assets:
+        source_url = a.labels.get("org.opencontainers.image.source")
+        assets.append(
+            {
+                "name": a.name,
+                "image": a.image,
+                "environment": a.labels["aspm.environment"].strip(),
+                "internet_facing": a.labels.get("aspm.internet_facing", "false").strip().lower()
+                == "true",
+                "repository": repos.get(_normalize_url(source_url)) if source_url else None,
+            }
+        )
+    linked = tx.run(
+        DISCOVERY_UPSERT_QUERY, assets=assets, source=discovery.source, now=now
+    ).consume().counters
+    backfilled = tx.run(DISCOVERY_BACKFILL_QUERY, assets=assets).consume().counters
+    return {
+        "assets": len(assets),
+        "linked": linked.relationships_created,
+        "unmatched": sorted(a["name"] for a in assets if a["repository"] is None),
+        "backfilled": backfilled.relationships_created,
+    }
+
+
+@app.post("/assets/discover", dependencies=protected)
+def discover_assets(discovery: DiscoveryIn):
+    with get_driver().session() as session:
+        return session.execute_write(apply_discovery, discovery, _now())
 
 
 @app.post("/findings", status_code=201, dependencies=protected)

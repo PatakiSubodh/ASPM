@@ -77,6 +77,38 @@ class CatalogIn(BaseModel):
         return self
 
 
+class DiscoveredAsset(BaseModel):
+    name: str
+    image: Optional[str] = None
+    labels: dict[str, str] = {}
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
+
+    @field_validator("labels")
+    @classmethod
+    def require_aspm_labels(cls, v: dict[str, str]) -> dict[str, str]:
+        if not v.get("aspm.environment", "").strip():
+            raise ValueError("aspm.environment label is required")
+        if v.get("aspm.internet_facing", "false").strip().lower() not in ("true", "false"):
+            raise ValueError("aspm.internet_facing label must be 'true' or 'false'")
+        return v
+
+
+class DiscoveryIn(BaseModel):
+    source: Literal["docker"] = "docker"
+    assets: list[DiscoveredAsset] = []
+
+    @model_validator(mode="after")
+    def unique_assets(self) -> "DiscoveryIn":
+        names = [a.name for a in self.assets]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate assets: {', '.join(duplicates)}")
+        return self
+
 
 class IngestParams(BaseModel):
     repo_name: str
