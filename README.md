@@ -12,6 +12,8 @@ flowchart LR
     catalog -->|"loaded on startup"| api
     github["Git repos"] -->|"git clone"| scanner
     scanner["scanner<br/>git + Trivy (scheduled)"] -->|"POST /ingest/trivy<br/>POST /scans/failed"| api
+    docker["Docker socket"] -->|"labelled containers"| discovery["discovery<br/>Docker SDK (scheduled)"]
+    discovery -->|"POST /assets/discover"| api
     manual["curl / CI"] -->|"POST /ingest/trivy<br/>POST /findings"| api
     browser["Browser"] -->|":3000"| web
     web["web<br/>Next.js 16 (App Router)"] -->|"server-side fetch<br/>X-API-Key"| api
@@ -24,6 +26,7 @@ flowchart LR
 | `api` | Python 3.14, FastAPI, neo4j driver | 8000 | Ingest, query, risk scoring, API-key auth |
 | `web` | Next.js 16, React 19, Tailwind v4, shadcn/ui, react-force-graph-2d | 3000 | Server-rendered UI; all data fetching happens on the Next.js server |
 | `scanner` | Python 3.14, git, Trivy 0.74 | — | Clones every catalog repository on a schedule, runs Trivy, posts each report as a scan run |
+| `discovery` | Python 3.14, Docker SDK | — | Lists running containers labelled `aspm.environment` on a schedule and posts them as assets |
 
 ### Data model
 
@@ -37,7 +40,7 @@ flowchart LR
 (:Repository)-[:DEPLOYS_TO]->(:Asset)
 ```
 
-- `DEPLOYS_TO` comes from `catalog.yaml`. A finding in a repository `AFFECTS` every asset that repository deploys to, so scanners only need the repo name.
+- `DEPLOYS_TO` comes from `catalog.yaml` or from Docker discovery. A finding in a repository `AFFECTS` every asset that repository deploys to, so scanners only need the repo name.
 
 - Keys (`Repository.name`, `Vulnerability.id`, `Asset.name`) are unique-constrained and normalized on ingest (whitespace collapsed; repo/asset names lower-cased, vulnerability ids upper-cased), so re-ingesting merges instead of duplicating.
 - A *finding* is one `Repository → Vulnerability → Asset` chain.
@@ -97,6 +100,7 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 | `GITHUB_TOKEN` | *(empty)* | `scanner`: read-only token for private GitHub repositories (`contents: read`); never stored |
 | `SCAN_INTERVAL_MINUTES` | `360` | `scanner`: minutes between scan rounds |
 | `SCAN_ON_START` | `true` | `scanner`: scan immediately on start instead of waiting one interval |
+| `DISCOVERY_INTERVAL_MINUTES` | `15` | `discovery`: minutes between Docker discovery rounds |
 
 ## Local development (recommended for coding)
 
@@ -190,6 +194,8 @@ curl -X POST http://localhost:8000/findings \
 
 Declare repositories and where they run in `catalog.yaml` (repo root). The API loads it on startup (`CATALOG_PATH`, mounted read-only in compose); `POST /catalog` applies the same structure as JSON. Each listed repository's `DEPLOYS_TO` edges are replaced by its `assets` list, and existing findings are linked to newly added assets. Set `assets: []` to unmap a repository.
 
+Running containers can register themselves instead. The `discovery` service reads the Docker socket (mounted read-only) and posts every container with an `aspm.environment` label to `POST /assets/discover`. The container name becomes the asset name, `aspm.internet_facing` (`"true"` / `"false"`) sets exposure, and `org.opencontainers.image.source` is matched against repository URLs (case, trailing `/` and `.git` ignored) to add `DEPLOYS_TO`. Discovered assets get `source: docker` and `last_discovered_at`. `api` and `web` carry these labels in `docker-compose.yml`.
+
 ```yaml
 repositories:
   - name: my-repo
@@ -234,6 +240,7 @@ All routes except `/health` require `X-API-Key`.
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
 | `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
 | `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
+| `POST` | `/assets/discover` | Upsert runtime assets `{source, assets: [{name, image, labels}]}` and link them to repositories by `org.opencontainers.image.source`; returns `{assets, linked, unmatched, backfilled}` |
 
 ## UI
 
@@ -249,13 +256,16 @@ All routes except `/health` require `X-API-Key`.
 ## Project layout
 
 ```
-docker-compose.yml     neo4j + api + web + scanner (+ demo-seed under the demo profile)
+docker-compose.yml     neo4j + api + web + scanner + discovery (+ demo-seed under the demo profile)
 .env.example           compose configuration
 catalog.yaml           repositories and the assets they deploy to
 demo/                  opt-in sample data: seed.cypher, purge.cypher, trivy-sample.json
 scanner/
   run.py               scan loop: clone → Trivy → upload; records failures
   Dockerfile           python:3.14-slim + git + Trivy binary
+discovery/
+  run.py               discovery loop: labelled Docker containers → POST /assets/discover
+  Dockerfile           python:3.14-slim + Docker SDK
 backend/
   main.py              FastAPI app: models, auth, routes, risk scoring, Trivy connector
   Dockerfile
