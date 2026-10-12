@@ -138,6 +138,19 @@ export default async function CatalogPage() {
                                   ● Public
                                 </Badge>
                               )}
+                              {asset.source === "docker" && (
+                                <Badge className="h-6 rotate-2 border-2 border-foreground bg-acid px-2 font-mono text-[11px] font-bold uppercase text-foreground shadow-brutal-sm">
+                                  ● Docker
+                                </Badge>
+                              )}
+                              {asset.source === "docker" && asset.last_discovered_at && (
+                                <span
+                                  title={asset.last_discovered_at}
+                                  className="font-mono text-[11px] uppercase text-muted-foreground"
+                                >
+                                  Seen {relativeTime(asset.last_discovered_at)}
+                                </span>
+                              )}
                             </li>
                           ))}
                         </ul>

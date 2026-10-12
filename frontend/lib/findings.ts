@@ -87,6 +87,7 @@ export interface Asset {
   type: string;
   internet_facing: boolean;
   source?: string;
+  last_discovered_at?: string;
 }
 
 export interface CatalogEntry {

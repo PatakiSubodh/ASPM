@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiHeaders } from "@/lib/api";
-import type { AssetSummary } from "@/lib/findings";
+import { relativeTime, type AssetSummary } from "@/lib/findings";
 import { SEVERITIES, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
 
@@ -119,6 +119,21 @@ export default async function AssetsPage() {
                       <p className="mt-1 font-mono text-[11px] uppercase text-muted-foreground">
                         {asset.type}
                       </p>
+                      {asset.source === "docker" && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Badge className="h-6 rotate-2 border-2 border-foreground bg-acid px-2 font-mono text-[11px] font-bold uppercase text-foreground shadow-brutal-sm">
+                            ● Docker
+                          </Badge>
+                          {asset.last_discovered_at && (
+                            <span
+                              title={asset.last_discovered_at}
+                              className="font-mono text-[11px] uppercase text-muted-foreground"
+                            >
+                              Seen {relativeTime(asset.last_discovered_at)}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="px-4 py-5 align-top">
                       <Badge
