@@ -194,7 +194,7 @@ curl -X POST http://localhost:8000/findings \
 
 Declare repositories and where they run in `catalog.yaml` (repo root). The API loads it on startup (`CATALOG_PATH`, mounted read-only in compose); `POST /catalog` applies the same structure as JSON. Each listed repository's `DEPLOYS_TO` edges are replaced by its `assets` list, and existing findings are linked to newly added assets. Set `assets: []` to unmap a repository.
 
-Running containers can register themselves instead. The `discovery` service reads the Docker socket (mounted read-only) and posts every container with an `aspm.environment` label to `POST /assets/discover`. The container name becomes the asset name, `aspm.internet_facing` (`"true"` / `"false"`) sets exposure, and `org.opencontainers.image.source` is matched against repository URLs (case, trailing `/` and `.git` ignored) to add `DEPLOYS_TO`. Discovered assets get `source: docker` and `last_discovered_at`. `api` and `web` carry these labels in `docker-compose.yml`.
+Running containers can register themselves instead. The `discovery` service reads the Docker socket (mounted read-only) and posts every container with an `aspm.environment` label to `POST /assets/discover`. The container name becomes the asset name, `aspm.internet_facing` (`"true"` / `"false"`) sets exposure, and `org.opencontainers.image.source` is matched against repository URLs (case, trailing `/` and `.git` ignored) to add `DEPLOYS_TO`. Discovered assets get `source: docker`, `status: active` and `last_discovered_at`. A Docker asset missing from a later round is marked `status: decommissioned` with `decommissioned_at` (its internet exposure and environment no longer raise finding risk) and becomes active again when it reappears. `api` and `web` carry these labels in `docker-compose.yml`.
 
 ```yaml
 repositories:
@@ -240,7 +240,7 @@ All routes except `/health` require `X-API-Key`.
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
 | `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
 | `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
-| `POST` | `/assets/discover` | Upsert runtime assets `{source, assets: [{name, image, labels}]}` and link them to repositories by `org.opencontainers.image.source`; returns `{assets, linked, unmatched, backfilled}` |
+| `POST` | `/assets/discover` | Upsert runtime assets `{source, assets: [{name, image, labels}]}` and link them to repositories by `org.opencontainers.image.source`; marks assets of the same `source` that were not posted `decommissioned`; returns `{assets, linked, unmatched, backfilled, decommissioned}` |
 
 ## UI
 
