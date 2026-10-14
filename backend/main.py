@@ -194,7 +194,9 @@ SET asset.environment = a.environment,
     asset.internet_facing = a.internet_facing,
     asset.image = coalesce(asset.image, a.image),
     asset.source = $source,
-    asset.last_discovered_at = $now
+    asset.last_discovered_at = $now,
+    asset.status = 'active',
+    asset.decommissioned_at = null
 WITH asset, a
 CALL (asset, a) {
   MATCH (repo:Repository {name: a.repository})
@@ -209,6 +211,14 @@ MATCH (repo:Repository {name: a.repository})-[:DEPLOYS_TO]->(asset:Asset {name: 
 MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
 MERGE (vuln)-[affects:AFFECTS]->(asset)
   ON CREATE SET affects.source = 'catalog'
+"""
+
+DISCOVERY_DECOMMISSION_QUERY = """
+MATCH (asset:Asset {source: $source})
+WHERE NOT asset.name IN $names AND coalesce(asset.status, 'active') <> 'decommissioned'
+SET asset.status = 'decommissioned',
+    asset.decommissioned_at = $now
+RETURN collect(asset.name) AS names
 """
 
 
@@ -240,11 +250,18 @@ def apply_discovery(tx, discovery: DiscoveryIn, now: str) -> dict:
         DISCOVERY_UPSERT_QUERY, assets=assets, source=discovery.source, now=now
     ).consume().counters
     backfilled = tx.run(DISCOVERY_BACKFILL_QUERY, assets=assets).consume().counters
+    decommissioned = tx.run(
+        DISCOVERY_DECOMMISSION_QUERY,
+        source=discovery.source,
+        names=[a["name"] for a in assets],
+        now=now,
+    ).single()["names"]
     return {
         "assets": len(assets),
         "linked": linked.relationships_created,
         "unmatched": sorted(a["name"] for a in assets if a["repository"] is None),
         "backfilled": backfilled.relationships_created,
+        "decommissioned": sorted(decommissioned),
     }
 
 

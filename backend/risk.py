@@ -41,4 +41,6 @@ def risk_score(severity: str, environment: Optional[str], internet_facing: bool)
 
 
 def asset_risk(severity: str, asset: dict) -> dict:
+    if asset.get("status") == "decommissioned":
+        return risk_score(severity, None, False)
     return risk_score(severity, asset.get("environment"), bool(asset.get("internet_facing")))

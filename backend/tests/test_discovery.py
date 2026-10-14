@@ -77,3 +77,45 @@ def test_discovery_rejects_invalid_internet_facing(client, repo):
     )
 
     assert res.status_code == 422
+
+
+def test_discovery_decommissions_missing_assets(client, repo):
+    post_catalog(client, catalog(repo))
+    discover(client, discovered(f"{repo}-api"), discovered(f"{repo}-web"))
+
+    result = discover(client, discovered(f"{repo}-api"))
+
+    assert f"{repo}-web" in result["decommissioned"]
+    assert f"{repo}-api" not in result["decommissioned"]
+    assets = {a["asset"]["name"]: a["asset"] for a in client.get("/assets").json()}
+    assert assets[f"{repo}-web"]["status"] == "decommissioned"
+    assert assets[f"{repo}-web"]["decommissioned_at"]
+    assert assets[f"{repo}-api"]["status"] == "active"
+
+
+def test_discovery_reactivates_returning_asset(client, repo):
+    post_catalog(client, catalog(repo))
+    discover(client, discovered(f"{repo}-api"), discovered(f"{repo}-web"))
+    discover(client, discovered(f"{repo}-api"))
+
+    result = discover(client, discovered(f"{repo}-api"), discovered(f"{repo}-web"))
+
+    assert f"{repo}-web" not in result["decommissioned"]
+    asset = next(a["asset"] for a in client.get("/assets").json() if a["asset"]["name"] == f"{repo}-web")
+    assert asset["status"] == "active"
+    assert asset.get("decommissioned_at") is None
+
+
+def test_decommissioned_asset_drops_exposure_from_risk(client, repo):
+    post_catalog(client, catalog(repo))
+    scan(client, repo, report("pyyaml"))
+    source = f"https://git.example.com/{repo}"
+    discover(client, discovered(f"{repo}-api", source, **{"aspm.internet_facing": "true"}))
+    before = client.get("/assets").json()
+
+    discover(client, discovered(f"{repo}-other"))
+
+    after = client.get("/assets").json()
+    risk = lambda rows: next(a["risk"] for a in rows if a["asset"]["name"] == f"{repo}-api")
+    assert risk(before)["factors"]["exposure"] == 1.5
+    assert risk(after)["factors"]["exposure"] == 1.0
