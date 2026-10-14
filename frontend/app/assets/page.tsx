@@ -124,6 +124,14 @@ export default async function AssetsPage() {
                           <Badge className="h-6 rotate-2 border-2 border-foreground bg-acid px-2 font-mono text-[11px] font-bold uppercase text-foreground shadow-brutal-sm">
                             ● Docker
                           </Badge>
+                          {asset.status === "decommissioned" && (
+                            <Badge
+                              title={asset.decommissioned_at}
+                              className="h-6 -rotate-2 border-2 border-foreground bg-low px-2 font-mono text-[11px] font-bold uppercase text-foreground line-through shadow-brutal-sm"
+                            >
+                              Decommissioned
+                            </Badge>
+                          )}
                           {asset.last_discovered_at && (
                             <span
                               title={asset.last_discovered_at}

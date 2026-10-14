@@ -88,6 +88,8 @@ export interface Asset {
   internet_facing: boolean;
   source?: string;
   last_discovered_at?: string;
+  status?: "active" | "decommissioned";
+  decommissioned_at?: string;
 }
 
 export interface CatalogEntry {
