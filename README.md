@@ -17,7 +17,7 @@ flowchart LR
     manual["curl / CI"] -->|"POST /ingest/trivy<br/>POST /findings"| api
     browser["Browser"] -->|":3000"| web
     web -->|"session cookies"| supabase["Supabase Auth<br/>email, Google, GitHub"]
-    web["web<br/>Next.js 16 (App Router)"] -->|"server-side fetch<br/>X-API-Key"| api
+    web["web<br/>Next.js 16 (App Router)"] -->|"server-side fetch<br/>Bearer (Supabase JWT)"| api
     api["api<br/>FastAPI"] -->|"Bolt :7687"| db[("neo4j<br/>Neo4j 5 + APOC")]
 ```
 
@@ -83,7 +83,7 @@ docker compose up -d --build
 | URL | What |
 |---|---|
 | http://localhost:3000 | Web UI (sign in or create an account on `/signup`) |
-| http://localhost:8000/docs | API docs (Swagger); click **Authorize** and paste the key |
+| http://localhost:8000/docs | API docs (Swagger); click **Authorize** and paste the key (machine routes) or a Supabase access token (user routes) |
 | http://localhost:7474 | Neo4j browser (`neo4j` / `aspm_dev_password`) |
 
 Startup order is enforced by health checks: `neo4j` → `api` → `web` and `scanner`. The scanner scans every repository in `catalog.yaml` once on start, then every `SCAN_INTERVAL_MINUTES`. On first start the API creates the constraints; the graph starts empty. To load sample data, see [`demo/README.md`](demo/README.md) (`docker compose --profile demo up -d`).
@@ -94,7 +94,7 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 
 | Variable | Default | Used by |
 |---|---|---|
-| `ASPM_API_KEY` | *(required)* | `api` (validates), `web` (sends) |
+| `ASPM_API_KEY` | *(required)* | `api` (validates on machine routes), `scanner` and `discovery` (send) |
 | `NEO4J_PASSWORD` | `aspm_dev_password` | `neo4j` (only applied when the data volume is first created), `api` |
 | `API_PORT` | `8000` | Host port for `api` |
 | `WEB_PORT` | `3000` | Host port for `web` |
@@ -102,7 +102,7 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 | `SCAN_INTERVAL_MINUTES` | `360` | `scanner`: minutes between scan rounds |
 | `SCAN_ON_START` | `true` | `scanner`: scan immediately on start instead of waiting one interval |
 | `DISCOVERY_INTERVAL_MINUTES` | `15` | `discovery`: minutes between Docker discovery rounds |
-| `NEXT_PUBLIC_SUPABASE_URL` | *(required)* | `web` build arg: Supabase Project URL, no trailing `/` |
+| `NEXT_PUBLIC_SUPABASE_URL` | *(required)* | `web` build arg: Supabase Project URL, no trailing `/`; also passed to `api` as `SUPABASE_URL` to verify login tokens |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | *(required)* | `web` build arg: Supabase publishable (or legacy `anon`) key; baked into the image, so rebuild `web` after changing it |
 
 ## Local development (recommended for coding)
@@ -120,13 +120,13 @@ Neo4j runs in Docker; the API and the web app run on your machine with hot reloa
 
 ### 1. Environment files (not in git, create them once)
 
-The same `ASPM_API_KEY` must be in all three files, otherwise the API returns 401 and the web pages show errors. Generate one with `python -c "import secrets;print(secrets.token_urlsafe(32))"`.
+The same `ASPM_API_KEY` must be in `.env` and `backend/.env`, otherwise the scanner and discovery get 401. The Supabase Project URL must match in all three files, otherwise every page gets 401. Generate one with `python -c "import secrets;print(secrets.token_urlsafe(32))"`.
 
 | File | Create from | Set |
 |---|---|---|
-| `.env` | `cp .env.example .env` | `ASPM_API_KEY`; leave `NEO4J_PASSWORD` as is |
-| `backend/.env` | `cp backend/.env.example backend/.env` | `ASPM_API_KEY` (same value) |
-| `frontend/.env.local` | create by hand | `NEXT_PUBLIC_API_URL=http://localhost:8000` and `ASPM_API_KEY=<same value>` |
+| `.env` | `cp .env.example .env` | `ASPM_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; leave `NEO4J_PASSWORD` as is |
+| `backend/.env` | `cp backend/.env.example backend/.env` | `ASPM_API_KEY` (same value), `SUPABASE_URL` (Supabase Project URL) |
+| `frontend/.env.local` | `cp frontend/.env.local.example frontend/.env.local` | `NEXT_PUBLIC_API_URL=http://localhost:8000`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
 
 (PowerShell: use `Copy-Item` instead of `cp`.)
 
@@ -156,7 +156,7 @@ npm install
 npm run dev
 ```
 
-The API refuses to start without `ASPM_API_KEY`. If PowerShell blocks `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+The API refuses to start without `ASPM_API_KEY` or `SUPABASE_URL`. If PowerShell blocks `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 
 ### 3. Sample data and tests
 
@@ -173,7 +173,8 @@ The API refuses to start without `ASPM_API_KEY`. If PowerShell blocks `Activate.
 
 | Symptom | Fix |
 |---|---|
-| Web pages show 401 or fetch errors | `ASPM_API_KEY` differs between the three env files |
+| Web pages show 401 or fetch errors | `SUPABASE_URL` in `backend/.env` differs from the frontend's Supabase URL, or the Supabase project still signs with the legacy JWT secret (Project Settings → JWT Keys) |
+| Scanner or discovery get 401 | `ASPM_API_KEY` differs between `.env` and `backend/.env` |
 | Backend cannot connect to Neo4j | Docker Desktop not running, or Neo4j not `healthy` yet |
 | `pip install` fails on a package | It has no Python 3.14 build at the pinned version; raise its version in `requirements.txt` |
 | Port 3000, 7474, 7687 or 8000 in use | Stop the other program, or change `API_PORT` / `WEB_PORT` |
@@ -226,7 +227,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 
 ## API
 
-All routes except `/health` require `X-API-Key`.
+`GET` routes and `PATCH /findings/{id}` need a signed-in user (`Authorization: Bearer <Supabase access token>`); the first request creates a `(:User)` node and status changes record `status_changed_by`. `POST` routes are for machines and need `X-API-Key`. `/health` is open.
 
 | Method | Path | Description |
 |---|---|---|
@@ -287,7 +288,7 @@ frontend/
 
 ## Current limitations
 
-- Pages need a Supabase login, but anyone can sign up, there's no forgot-password flow and no roles; the API still uses one shared key and doesn't know the user.
+- Pages need a Supabase login, but anyone can sign up, there's no forgot-password flow and no roles; the API checks the login token but every signed-in user can read everything and change any status.
 - Scanners: Trivy (dependencies and images) and Semgrep (code); no generic SARIF connector yet.
 - No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round).
 - Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
