@@ -16,6 +16,7 @@ flowchart LR
     discovery -->|"POST /assets/discover"| api
     manual["curl / CI"] -->|"POST /ingest/trivy<br/>POST /findings"| api
     browser["Browser"] -->|":3000"| web
+    web -->|"session cookies"| supabase["Supabase Auth<br/>email, Google, GitHub"]
     web["web<br/>Next.js 16 (App Router)"] -->|"server-side fetch<br/>X-API-Key"| api
     api["api<br/>FastAPI"] -->|"Bolt :7687"| db[("neo4j<br/>Neo4j 5 + APOC")]
 ```
@@ -24,8 +25,8 @@ flowchart LR
 |---|---|---|---|
 | `neo4j` | Neo4j 5.24 community + APOC | 7474 (browser), 7687 (bolt) | Stores the attack-path graph; uniqueness constraints on every node key |
 | `api` | Python 3.14, FastAPI, neo4j driver | 8000 | Ingest, query, risk scoring, API-key auth |
-| `web` | Next.js 16, React 19, Tailwind v4, shadcn/ui, react-force-graph-2d | 3000 | Server-rendered UI; all data fetching happens on the Next.js server |
-| `scanner` | Python 3.14, git, Trivy 0.74 | — | Clones every catalog repository on a schedule, runs Trivy, posts each report as a scan run |
+| `web` | Next.js 16, React 19, Tailwind v4, shadcn/ui, react-force-graph-2d | 3000 | Server-rendered UI behind Supabase login; all data fetching happens on the Next.js server |
+| `scanner` | Python 3.14, git, Trivy 0.74, Semgrep | — | Clones every catalog repository on a schedule, runs Trivy and Semgrep (plus `trivy image` for catalog assets with an `image`), posts each report as a scan run |
 | `discovery` | Python 3.14, Docker SDK | — | Lists running containers labelled `aspm.environment` on a schedule and posts them as assets |
 
 ### Data model
@@ -73,7 +74,7 @@ Requires Docker Desktop.
 cp .env.example .env
 ```
 
-Set `ASPM_API_KEY` in `.env` to a random value (e.g. `python -c "import secrets;print(secrets.token_urlsafe(32))"`), then:
+Set `ASPM_API_KEY` in `.env` to a random value (e.g. `python -c "import secrets;print(secrets.token_urlsafe(32))"`) and fill in the two Supabase values (see Configuration), then:
 
 ```bash
 docker compose up -d --build
@@ -81,7 +82,7 @@ docker compose up -d --build
 
 | URL | What |
 |---|---|
-| http://localhost:3000 | Web UI |
+| http://localhost:3000 | Web UI (sign in or create an account on `/signup`) |
 | http://localhost:8000/docs | API docs (Swagger); click **Authorize** and paste the key |
 | http://localhost:7474 | Neo4j browser (`neo4j` / `aspm_dev_password`) |
 
@@ -101,6 +102,8 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 | `SCAN_INTERVAL_MINUTES` | `360` | `scanner`: minutes between scan rounds |
 | `SCAN_ON_START` | `true` | `scanner`: scan immediately on start instead of waiting one interval |
 | `DISCOVERY_INTERVAL_MINUTES` | `15` | `discovery`: minutes between Docker discovery rounds |
+| `NEXT_PUBLIC_SUPABASE_URL` | *(required)* | `web` build arg: Supabase Project URL, no trailing `/` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | *(required)* | `web` build arg: Supabase publishable (or legacy `anon`) key; baked into the image, so rebuild `web` after changing it |
 
 ## Local development (recommended for coding)
 
@@ -238,6 +241,7 @@ All routes except `/health` require `X-API-Key`.
 | `GET` | `/scans/failing` | Repositories whose latest scan (per scanner) failed, with reason and last successful scan time |
 | `POST` | `/scans/failed` | Record a failed scan run (`repo_name`, `scanner`, `error`, optional `repo_url`, `commit`, `detail`); never resolves anything |
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
+| `POST` | `/ingest/semgrep` | Ingest a Semgrep JSON report the same way (SAST findings) |
 | `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
 | `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
 | `POST` | `/assets/discover` | Upsert runtime assets `{source, assets: [{name, image, labels}]}` and link them to repositories by `org.opencontainers.image.source`; marks assets of the same `source` that were not posted `decommissioned`; returns `{assets, linked, unmatched, backfilled, decommissioned}` |
@@ -246,6 +250,7 @@ All routes except `/health` require `X-API-Key`.
 
 | Page | What it shows |
 |---|---|
+| `/login`, `/signup` | Email/password, Google and GitHub sign-in and sign-up; every other page redirects here when signed out |
 | `/` | Findings table ranked by risk, severity summary tiles, status filter, first / last seen; red warning when a repository's latest scan failed |
 | `/graph` | Interactive force-directed graph of the whole attack-path graph |
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
@@ -267,19 +272,23 @@ discovery/
   run.py               discovery loop: labelled Docker containers → POST /assets/discover
   Dockerfile           python:3.14-slim + Docker SDK
 backend/
-  main.py              FastAPI app: models, auth, routes, risk scoring, Trivy connector
+  main.py              FastAPI app, API-key auth, routes
+  db.py, models.py     Neo4j driver, Pydantic models
+  risk.py, ingest.py   risk scoring, ingest and auto-resolve
+  connectors/          Trivy and Semgrep report parsers
   Dockerfile
 frontend/
-  app/                 pages (App Router, Server Components)
+  app/                 pages (App Router, Server Components), auth actions and routes
+  proxy.ts             Supabase session refresh; redirects signed-out visitors to /login
   components/          UI components (graph, nav, badges, shadcn/ui)
-  lib/                 shared types, graph helpers, API headers
+  lib/                 shared types, graph helpers, API headers, Supabase server client
   Dockerfile           standalone Next.js build
 ```
 
 ## Current limitations
 
-- Single shared API key; the web UI has no user login.
-- Only Trivy (dependency scanning) is supported; Semgrep (code) and container image scanning come next.
+- Pages need a Supabase login, but anyone can sign up, there's no forgot-password flow and no roles; the API still uses one shared key and doesn't know the user.
+- Scanners: Trivy (dependencies and images) and Semgrep (code); no generic SARIF connector yet.
 - No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round).
 - Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
 - Risk weights are hardcoded; no exploitability (EPSS/KEV) or asset-criticality input.
