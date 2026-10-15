@@ -12,7 +12,7 @@ export async function updateStatus(id: string, formData: FormData) {
   if (!STATUSES.includes(status as FindingStatus)) {
     throw new Error(`Invalid status: ${status}`);
   }
-  const headers = new Headers(apiHeaders());
+  const headers = new Headers(await apiHeaders());
   headers.set("Content-Type", "application/json");
   const res = await fetch(`${API_URL}/findings/${encodeURIComponent(id)}`, {
     method: "PATCH",

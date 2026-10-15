@@ -20,7 +20,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 async function getCatalog(): Promise<CatalogEntry[]> {
   const res = await fetch(`${API_URL}/catalog`, {
     cache: "no-store",
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);

@@ -1,3 +1,9 @@
-export function apiHeaders(): HeadersInit {
-  return { "X-API-Key": process.env.ASPM_API_KEY ?? "" };
+import { createClient } from "@/lib/supabase/server";
+
+export async function apiHeaders(): Promise<HeadersInit> {
+  const supabase = await createClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return { Authorization: `Bearer ${session?.access_token ?? ""}` };
 }

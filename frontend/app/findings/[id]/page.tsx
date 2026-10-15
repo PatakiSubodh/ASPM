@@ -29,7 +29,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 async function getFinding(id: string): Promise<FindingDetail | null> {
   const res = await fetch(`${API_URL}/findings/${encodeURIComponent(id)}`, {
     cache: "no-store",
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   if (res.status === 404) return null;
   if (!res.ok) {

@@ -34,7 +34,7 @@ async function getFindings(status: string): Promise<Finding[]> {
   const query = status === "active" ? "" : `?status=${encodeURIComponent(status)}`;
   const res = await fetch(`${API_URL}/findings${query}`, {
     cache: "no-store",
-    headers: apiHeaders(),
+    headers: await apiHeaders(),
   });
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
@@ -46,7 +46,7 @@ async function getFailingScans(): Promise<FailingScan[]> {
   try {
     const res = await fetch(`${API_URL}/scans/failing`, {
       cache: "no-store",
-      headers: apiHeaders(),
+      headers: await apiHeaders(),
     });
     return res.ok ? await res.json() : [];
   } catch {
