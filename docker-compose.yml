@@ -39,6 +39,7 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-aspm_dev_password}
       - ASPM_API_KEY=${ASPM_API_KEY:-}
       - CATALOG_PATH=/app/catalog.yaml
+      - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
     volumes:
       - ./catalog.yaml:/app/catalog.yaml:ro
     depends_on:

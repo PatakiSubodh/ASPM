@@ -26,7 +26,10 @@ CONSTRAINTS = [
     "FOR (a:Asset) REQUIRE a.name IS UNIQUE",
     "CREATE CONSTRAINT scan_id_unique IF NOT EXISTS "
     "FOR (s:Scan) REQUIRE s.id IS UNIQUE",
+    "CREATE CONSTRAINT user_id_unique IF NOT EXISTS "
+    "FOR (u:User) REQUIRE u.id IS UNIQUE",
 ]
+
 
 
 def ensure_constraints(db: Driver) -> None:

@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from neo4j import Driver
 
+from auth import get_current_user, init_auth
 from connectors import semgrep, trivy
 from db import close_driver, connect_driver, get_driver
 from ingest import _now, ingest_batch, require_known_repository, run_scan
@@ -51,6 +52,7 @@ CATALOG_PATH = os.getenv("CATALOG_PATH", "/app/catalog.yaml")
 async def lifespan(app: FastAPI):
     if not ASPM_API_KEY:
         raise RuntimeError("ASPM_API_KEY is not set")
+    init_auth()
     load_catalog_file(connect_driver())
     yield
     close_driver()
@@ -75,6 +77,7 @@ def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
 
 
 protected = [Depends(require_api_key)]
+signed_in = [Depends(get_current_user)]
 
 
 def _parse_statuses(status: str) -> Optional[list[str]]:
@@ -164,7 +167,7 @@ def upsert_catalog(catalog: CatalogIn):
         return session.execute_write(apply_catalog, catalog)
 
 
-@app.get("/catalog", dependencies=protected)
+@app.get("/catalog", dependencies=signed_in)
 def get_catalog():
     query = """
     MATCH (repo:Repository)
@@ -301,7 +304,7 @@ def ingest_finding(finding: FindingIngest):
     }
 
 
-@app.patch("/findings/{finding_id}", dependencies=protected)
+@app.patch("/findings/{finding_id}", dependencies=signed_in)
 def update_finding_status(finding_id: str, update: StatusUpdate):
     query = """
     MATCH (vuln:Vulnerability {id: $id})
@@ -329,7 +332,7 @@ def update_finding_status(finding_id: str, update: StatusUpdate):
     return {"vulnerability": record["vulnerability"]}
 
 
-@app.get("/findings", dependencies=protected)
+@app.get("/findings", dependencies=signed_in)
 def list_findings(status: str = ",".join(ACTIVE_STATUSES)):
     """Return every repository -> vulnerability -> asset chain in the graph."""
     query = """
@@ -352,7 +355,7 @@ def list_findings(status: str = ",".join(ACTIVE_STATUSES)):
     return sorted(findings, key=lambda f: f["risk"]["score"], reverse=True)
 
 
-@app.get("/findings/{finding_id}", dependencies=protected)
+@app.get("/findings/{finding_id}", dependencies=signed_in)
 def get_finding(finding_id: str):
     query = """
     MATCH (vuln:Vulnerability {id: $id})
@@ -379,7 +382,7 @@ def get_finding(finding_id: str):
     }
 
 
-@app.get("/assets", dependencies=protected)
+@app.get("/assets", dependencies=signed_in)
 def list_assets():
     query = """
     MATCH (asset:Asset)
@@ -405,7 +408,7 @@ def list_assets():
         ]
 
 
-@app.get("/graph", dependencies=protected)
+@app.get("/graph", dependencies=signed_in)
 def get_graph(status: str = ",".join(ACTIVE_STATUSES)):
     query = """
     MATCH (n)
@@ -466,7 +469,7 @@ def record_failed_scan(failure: ScanFailureIn):
     return {"scan_id": scan_id, "status": "failed"}
 
 
-@app.get("/scans/failing", dependencies=protected)
+@app.get("/scans/failing", dependencies=signed_in)
 def list_failing_scans():
     query = """
     MATCH (s:Scan)-[:SCANNED]->(repo:Repository)
@@ -484,7 +487,7 @@ def list_failing_scans():
         return [record.data() for record in session.run(query)]
 
 
-@app.get("/scans", dependencies=protected)
+@app.get("/scans", dependencies=signed_in)
 def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
     query = """
     MATCH (s:Scan)-[:SCANNED]->(repo:Repository)
