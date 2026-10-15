@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { buttonVariants } from "@/components/ui/button";
+import { signOut } from "@/app/auth/actions";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
@@ -12,8 +13,9 @@ const LINKS = [
   { href: "/assets", label: "Assets" },
   { href: "/scans", label: "Scans" },
   { href: "/catalog", label: "Catalog" },
-  { href: "/login", label: "Login" },
 ];
+
+const AUTH_PAGES = ["/login", "/signup"];
 
 export function SiteNav() {
   const pathname = usePathname();
@@ -28,7 +30,7 @@ export function SiteNav() {
             code → cloud
           </span>
         </Link>
-        <nav className="flex items-center gap-3">
+        <nav className={cn("flex items-center gap-3", AUTH_PAGES.includes(pathname) && "hidden")}>
           {LINKS.map(({ href, label }) => {
             const active = pathname === href;
             return (
@@ -48,6 +50,17 @@ export function SiteNav() {
               </Link>
             );
           })}
+          <form action={signOut}>
+            <button
+              type="submit"
+              className={cn(
+                buttonVariants({ variant: "outline", size: "lg" }),
+                "brutal brutal-lift shadow-brutal-sm bg-card px-4 font-mono text-xs font-bold uppercase tracking-widest hover:bg-card",
+              )}
+            >
+              Logout
+            </button>
+          </form>
         </nav>
       </div>
     </header>
