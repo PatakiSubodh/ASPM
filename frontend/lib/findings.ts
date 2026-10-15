@@ -79,6 +79,7 @@ export interface Vulnerability {
   resolved_at?: string;
   reopened_at?: string;
   status_changed_at?: string;
+  status_changed_by?: string;
 }
 
 export interface Asset {

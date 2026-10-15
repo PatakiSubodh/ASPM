@@ -176,6 +176,7 @@ function StatusCard({ vuln }: { vuln: Vulnerability }) {
   if (vuln.cwe?.length) meta.push(["CWE", vuln.cwe.join(", ")]);
   if (vuln.resolved_at) meta.push(["Resolved", relativeTime(vuln.resolved_at)]);
   if (vuln.reopened_at) meta.push(["Reopened", relativeTime(vuln.reopened_at)]);
+  if (vuln.status_changed_by) meta.push(["Changed by", vuln.status_changed_by]);
 
   return (
     <Card

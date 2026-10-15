@@ -304,13 +304,19 @@ def ingest_finding(finding: FindingIngest):
     }
 
 
-@app.patch("/findings/{finding_id}", dependencies=signed_in)
-def update_finding_status(finding_id: str, update: StatusUpdate):
+@app.patch("/findings/{finding_id}")
+def update_finding_status(
+    finding_id: str,
+    update: StatusUpdate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
     query = """
     MATCH (vuln:Vulnerability {id: $id})
     WITH vuln, vuln.status = $status AS unchanged
     SET vuln.status = $status,
         vuln.status_changed_at = CASE WHEN unchanged THEN vuln.status_changed_at ELSE $now END,
+        vuln.status_changed_by = CASE WHEN unchanged THEN vuln.status_changed_by ELSE $user_email END,
+        vuln.status_changed_by_id = CASE WHEN unchanged THEN vuln.status_changed_by_id ELSE $user_id END,
         vuln.resolved_at = CASE
           WHEN $status <> 'resolved' THEN null
           WHEN unchanged THEN vuln.resolved_at
@@ -325,6 +331,8 @@ def update_finding_status(finding_id: str, update: StatusUpdate):
                 id=" ".join(finding_id.split()).upper(),
                 status=update.status,
                 now=_now(),
+                user_email=current_user["email"],
+                user_id=current_user["id"],
             ).single()
         )
     if record is None:
