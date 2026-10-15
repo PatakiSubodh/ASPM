@@ -1,26 +1,40 @@
-import { ArrowRight, KeyRound } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+
+import { signIn } from "@/app/auth/actions";
+import { AuthNotice } from "@/components/auth-notice";
+import { OAuthButtons } from "@/components/oauth-buttons";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { BUTTON, FIELD_INPUT, FIELD_LABEL } from "@/lib/auth-styles";
 
-const FIELD_LABEL = "font-mono text-[11px] font-bold uppercase tracking-widest";
-const FIELD_INPUT =
-  "h-11 border-2 border-foreground bg-card px-3 font-mono text-sm shadow-brutal-sm placeholder:text-muted-foreground/70 focus-visible:border-foreground focus-visible:ring-0 focus-visible:bg-acid/15";
-const BUTTON =
-  "brutal brutal-lift h-11 w-full gap-2 font-mono text-xs font-bold uppercase tracking-widest";
+const ERRORS: Record<string, string> = {
+  credentials: "Wrong email or password, or the email is not confirmed yet.",
+  oauth: "Google / GitHub sign-in failed. Try again.",
+  confirm: "The confirmation link is invalid or has expired.",
+};
+
+const MESSAGES: Record<string, string> = {
+  "check-email": "Check your inbox to confirm your account, then sign in.",
+};
 
 const HIGHLIGHTS = [
+
   "Every open issue ranked by real exposure",
   "Trace code to the assets it runs on",
   "Scans keep status up to date on their own",
 ];
 
-export default function LoginPage() {
+export default async function LoginPage({ searchParams }: PageProps<"/login">) {
+  const { error, message } = await searchParams;
+  const errorText = ERRORS[String(error)];
+  const messageText = MESSAGES[String(message)];
+
   return (
+
     <div className="grid items-center gap-12 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
       <section className="animate-rise space-y-6">
         <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
@@ -62,7 +76,9 @@ export default function LoginPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6 px-6 py-6">
-          <form className="space-y-5" noValidate>
+          {errorText && <AuthNotice tone="error">{errorText}</AuthNotice>}
+          {messageText && <AuthNotice tone="info">{messageText}</AuthNotice>}
+          <form action={signIn} className="space-y-5" noValidate>
             <div className="space-y-2">
               <Label htmlFor="email" className={FIELD_LABEL}>
                 Work email
@@ -99,15 +115,7 @@ export default function LoginPage() {
               />
             </div>
 
-            <Label className="cursor-pointer gap-3 font-mono text-xs">
-              <Checkbox
-                name="remember"
-                className="size-5 rounded-none border-2 border-foreground bg-card data-checked:border-foreground data-checked:bg-acid data-checked:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              Keep me signed in for 30 days
-            </Label>
-
-            <Button type="button" className={`${BUTTON} bg-acid text-foreground hover:bg-acid`}>
+            <Button type="submit" className={`${BUTTON} bg-acid text-foreground hover:bg-acid`}>
               Sign in
               <ArrowRight className="size-4" />
             </Button>
@@ -119,17 +127,16 @@ export default function LoginPage() {
             <span className="h-0.5 flex-1 bg-foreground/20" />
           </div>
 
-          <Button
-            type="button"
-            variant="outline"
-            className={`${BUTTON} bg-card hover:bg-card`}
-          >
-            <KeyRound className="size-4" />
-            Continue with SSO
-          </Button>
+          <OAuthButtons />
         </CardContent>
         <div className="border-t-2 border-dashed border-foreground/20 px-6 py-4 font-mono text-[11px] text-muted-foreground">
-          No account yet? Ask your workspace admin for an invite.
+          No account yet?{" "}
+          <Link
+            href="/signup"
+            className="underline decoration-2 underline-offset-4 hover:bg-acid"
+          >
+            Create one
+          </Link>
         </div>
       </Card>
     </div>
