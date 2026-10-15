@@ -230,5 +230,5 @@ def test_patch_rejects_bad_input(client, repo, finding, body, expected):
 
 
 def test_api_key_required(client):
-    assert client.get("/findings", headers={"X-API-Key": "wrong"}).status_code == 401
+    assert client.post("/scans/failed", json={}, headers={"X-API-Key": "wrong"}).status_code == 401
     assert client.get("/health", headers={"X-API-Key": ""}).status_code == 200
