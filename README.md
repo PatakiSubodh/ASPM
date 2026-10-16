@@ -252,6 +252,8 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | Page | What it shows |
 |---|---|
 | `/login`, `/signup` | Email/password, Google and GitHub sign-in and sign-up; every other page redirects here when signed out |
+| `/forgot-password`, `/reset-password` | Request a password reset link by email, then set a new password from it |
+| Header | Current section, **Index** button (full-screen section list; keys `1`–`5` jump, `Esc` closes) and profile menu (name, email, Logout) |
 | `/` | Findings table ranked by risk, severity summary tiles, status filter, first / last seen; red warning when a repository's latest scan failed |
 | `/graph` | Interactive force-directed graph of the whole attack-path graph |
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
@@ -288,7 +290,7 @@ frontend/
 
 ## Current limitations
 
-- Pages need a Supabase login, but anyone can sign up, there's no forgot-password flow and no roles; the API checks the login token but every signed-in user can read everything and change any status.
+- Pages need a Supabase login, but anyone can sign up and there are no roles; reset emails only reach Supabase org members until custom SMTP is set up; the API checks the login token but every signed-in user can read everything and change any status.
 - Scanners: Trivy (dependencies and images) and Semgrep (code); no generic SARIF connector yet.
 - No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round).
 - Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
