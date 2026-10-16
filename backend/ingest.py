@@ -13,7 +13,7 @@ def _now() -> str:
 
 
 ASSET_UPSERT_QUERY = """
-MERGE (asset:Asset {name: $asset.name})
+MERGE (asset:Asset {owner: $owner, name: $asset.name})
   ON CREATE SET
     asset.environment = $asset.environment,
     asset.type = $asset.type,
@@ -22,12 +22,12 @@ MERGE (asset:Asset {name: $asset.name})
 """
 
 INGEST_BATCH_QUERY = """
-MERGE (repo:Repository {name: $repo.name})
+MERGE (repo:Repository {owner: $owner, name: $repo.name})
   ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
 WITH repo
-OPTIONAL MATCH (explicit:Asset {name: $asset_name})
+OPTIONAL MATCH (explicit:Asset {owner: $owner, name: $asset_name})
 UNWIND $findings AS f
-MERGE (vuln:Vulnerability {id: f.id})
+MERGE (vuln:Vulnerability {owner: $owner, id: f.id})
   ON CREATE SET vuln.status = 'open', vuln.first_seen = $now
 WITH repo, explicit, f, vuln, vuln.status = 'resolved' AS reopened
 SET vuln.cve = f.cve,
@@ -62,9 +62,9 @@ RETURN count(vuln) AS ingested, sum(CASE WHEN reopened THEN 1 ELSE 0 END) AS reo
 """
 
 AUTO_RESOLVE_QUERY = """
-MATCH (:Repository {name: $repo})-[:CONTAINS]->(v:Vulnerability {scanner: $scanner})
+MATCH (:Repository {owner: $owner, name: $repo})-[:CONTAINS]->(v:Vulnerability {scanner: $scanner})
 WHERE v.status IN ['open', 'in_progress'] AND v.last_scan_id <> $scan_id
-  AND ($asset IS NULL OR EXISTS { (v)-[:AFFECTS]->(:Asset {name: $asset}) })
+  AND ($asset IS NULL OR EXISTS { (v)-[:AFFECTS]->(:Asset {owner: $owner, name: $asset}) })
 SET v.status = 'resolved', v.resolved_at = $now
 RETURN count(v) AS resolved
 """
@@ -72,6 +72,7 @@ RETURN count(v) AS resolved
 
 def ingest_batch(
     tx,
+    owner: str,
     repo: RepositoryIn,
     asset: Optional[AssetIn],
     scanner: str,
@@ -82,9 +83,10 @@ def ingest_batch(
     link_deployed: bool = True,
 ) -> dict:
     if asset is not None:
-        tx.run(ASSET_UPSERT_QUERY, asset=asset.model_dump()).consume()
+        tx.run(ASSET_UPSERT_QUERY, owner=owner, asset=asset.model_dump()).consume()
     record = tx.run(
         INGEST_BATCH_QUERY,
+        owner=owner,
         repo=repo.model_dump(),
         asset_name=asset.name if asset else None,
         scanner=scanner,
@@ -98,6 +100,7 @@ def ingest_batch(
 
 
 def run_scan(
+    owner: str,
     repo: RepositoryIn,
     asset: Optional[AssetIn],
     scanner: str,
@@ -114,12 +117,13 @@ def run_scan(
     def work(tx) -> dict:
         tx.run(
             """
-            MERGE (repo:Repository {name: $repo.name})
+            MERGE (repo:Repository {owner: $owner, name: $repo.name})
               ON CREATE SET repo.url = $repo.url, repo.language = $repo.language
-            CREATE (s:Scan {id: $scan_id, scanner: $scanner, started_at: $now,
+            CREATE (s:Scan {id: $scan_id, owner: $owner, scanner: $scanner, started_at: $now,
                             commit: $commit, partial: $partial})
             MERGE (s)-[:SCANNED]->(repo)
             """,
+            owner=owner,
             repo=repo.model_dump(),
             scan_id=scan_id,
             scanner=scanner,
@@ -128,12 +132,13 @@ def run_scan(
             partial=partial,
         ).consume()
         counts = ingest_batch(
-            tx, repo, asset, scanner, scan_id, findings, started_at, type, not image
+            tx, owner, repo, asset, scanner, scan_id, findings, started_at, type, not image
         )
         resolved = 0
         if not partial:
             resolved = tx.run(
                 AUTO_RESOLVE_QUERY,
+                owner=owner,
                 repo=repo.name,
                 scanner=scanner,
                 scan_id=scan_id,
@@ -165,12 +170,13 @@ def run_scan(
         return session.execute_write(work)
 
 
-def require_known_repository(repo: RepositoryIn) -> None:
+def require_known_repository(owner: str, repo: RepositoryIn) -> None:
     if repo.url:
         return
     with get_driver().session() as session:
         exists = session.run(
-            "MATCH (r:Repository {name: $name}) RETURN count(r) > 0 AS exists",
+            "MATCH (r:Repository {owner: $owner, name: $name}) RETURN count(r) > 0 AS exists",
+            owner=owner,
             name=repo.name,
         ).single()["exists"]
     if not exists:

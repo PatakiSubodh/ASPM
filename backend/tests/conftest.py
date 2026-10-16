@@ -57,6 +57,7 @@ def client():
     with TestClient(main.app, headers={"X-API-Key": main.ASPM_API_KEY}) as c:
         auth.jwks_client = StaticJWKS()
         c.headers["Authorization"] = f"Bearer {make_token()}"
+        c.params = {"owner": TEST_USER_ID}
         yield c
         with main.get_driver().session() as session:
             session.run("MATCH (u:User {id: $id}) DETACH DELETE u", id=TEST_USER_ID).consume()

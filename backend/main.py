@@ -24,7 +24,7 @@ from neo4j import Driver
 
 from auth import get_current_user, init_auth
 from connectors import semgrep, trivy
-from db import close_driver, connect_driver, get_driver
+from db import close_driver, connect_driver, get_driver, migrate_ownership
 from ingest import _now, ingest_batch, require_known_repository, run_scan
 from models import (
     ACTIVE_STATUSES,
@@ -46,6 +46,7 @@ load_dotenv()
 
 ASPM_API_KEY = os.getenv("ASPM_API_KEY", "")
 CATALOG_PATH = os.getenv("CATALOG_PATH", "/app/catalog.yaml")
+DEV_OWNER = os.getenv("ASPM_DEV_OWNER", "")
 
 
 @asynccontextmanager
@@ -53,7 +54,10 @@ async def lifespan(app: FastAPI):
     if not ASPM_API_KEY:
         raise RuntimeError("ASPM_API_KEY is not set")
     init_auth()
-    load_catalog_file(connect_driver())
+    db = connect_driver()
+    if DEV_OWNER:
+        migrate_ownership(db, DEV_OWNER)
+        load_catalog_file(db, DEV_OWNER)
     yield
     close_driver()
 
@@ -76,8 +80,17 @@ def require_api_key(api_key: Optional[str] = Security(api_key_header)) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
+def machine_owner(owner: Optional[str] = Query(None)) -> str:
+    resolved = (owner or DEV_OWNER).strip()
+    if not resolved:
+        raise HTTPException(status_code=422, detail="owner is required")
+    return resolved
+
+
 protected = [Depends(require_api_key)]
 signed_in = [Depends(get_current_user)]
+Owner = Annotated[str, Depends(machine_owner)]
+CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 
 def _parse_statuses(status: str) -> Optional[list[str]]:
@@ -101,13 +114,13 @@ def health():
 
 CATALOG_UPSERT_QUERY = """
 UNWIND $repositories AS r
-MERGE (repo:Repository {name: r.name})
+MERGE (repo:Repository {owner: $owner, name: r.name})
 SET repo.url = r.url,
     repo.language = coalesce(r.language, repo.language),
     repo.branch = coalesce(r.branch, repo.branch)
 WITH repo, r
 UNWIND r.assets AS a
-MERGE (asset:Asset {name: a.name})
+MERGE (asset:Asset {owner: $owner, name: a.name})
 SET asset.environment = a.environment,
     asset.type = a.type,
     asset.internet_facing = a.internet_facing,
@@ -119,7 +132,7 @@ MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
 
 CATALOG_PRUNE_QUERY = """
 UNWIND $repositories AS r
-MATCH (repo:Repository {name: r.name})-[deploys:DEPLOYS_TO {source: 'catalog'}]->(asset:Asset)
+MATCH (repo:Repository {owner: $owner, name: r.name})-[deploys:DEPLOYS_TO {source: 'catalog'}]->(asset:Asset)
 WHERE NOT asset.name IN [a IN r.assets | a.name]
 CALL (repo, asset) {
   MATCH (repo)-[:CONTAINS]->(:Vulnerability)-[derived:AFFECTS {source: 'catalog'}]->(asset)
@@ -131,18 +144,18 @@ RETURN count(deploys) AS unlinked
 
 CATALOG_BACKFILL_QUERY = """
 UNWIND $repositories AS r
-MATCH (repo:Repository {name: r.name})-[:DEPLOYS_TO]->(asset:Asset)
+MATCH (repo:Repository {owner: $owner, name: r.name})-[:DEPLOYS_TO]->(asset:Asset)
 MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
 MERGE (vuln)-[affects:AFFECTS]->(asset)
   ON CREATE SET affects.source = 'catalog'
 """
 
 
-def apply_catalog(tx, catalog: CatalogIn) -> dict:
+def apply_catalog(tx, owner: str, catalog: CatalogIn) -> dict:
     repositories = [r.model_dump() for r in catalog.repositories]
-    linked = tx.run(CATALOG_UPSERT_QUERY, repositories=repositories).consume().counters
-    unlinked = tx.run(CATALOG_PRUNE_QUERY, repositories=repositories).single()["unlinked"]
-    backfilled = tx.run(CATALOG_BACKFILL_QUERY, repositories=repositories).consume().counters
+    linked = tx.run(CATALOG_UPSERT_QUERY, owner=owner, repositories=repositories).consume().counters
+    unlinked = tx.run(CATALOG_PRUNE_QUERY, owner=owner, repositories=repositories).single()["unlinked"]
+    backfilled = tx.run(CATALOG_BACKFILL_QUERY, owner=owner, repositories=repositories).consume().counters
     return {
         "repositories": len(repositories),
         "assets": len({a["name"] for r in repositories for a in r["assets"]}),
@@ -152,25 +165,25 @@ def apply_catalog(tx, catalog: CatalogIn) -> dict:
     }
 
 
-def load_catalog_file(db: Driver) -> None:
+def load_catalog_file(db: Driver, owner: str) -> None:
     path = Path(CATALOG_PATH)
     if not path.is_file():
         return
     catalog = CatalogIn.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     with db.session() as session:
-        session.execute_write(apply_catalog, catalog)
+        session.execute_write(apply_catalog, owner, catalog)
 
 
 @app.post("/catalog", dependencies=protected)
-def upsert_catalog(catalog: CatalogIn):
+def upsert_catalog(catalog: CatalogIn, owner: Owner):
     with get_driver().session() as session:
-        return session.execute_write(apply_catalog, catalog)
+        return session.execute_write(apply_catalog, owner, catalog)
 
 
 @app.get("/catalog", dependencies=signed_in)
-def get_catalog():
+def get_catalog(current_user: CurrentUser):
     query = """
-    MATCH (repo:Repository)
+    MATCH (repo:Repository {owner: $owner})
     OPTIONAL MATCH (repo)-[:DEPLOYS_TO]->(asset:Asset)
     WITH repo, collect(asset { .* }) AS assets
     OPTIONAL MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
@@ -185,13 +198,13 @@ def get_catalog():
                 "assets": sorted(record["assets"], key=lambda a: a["name"]),
                 "open_total": record["open_total"],
             }
-            for record in session.run(query, statuses=ACTIVE_STATUSES)
+            for record in session.run(query, owner=current_user["id"], statuses=ACTIVE_STATUSES)
         ]
 
 
 DISCOVERY_UPSERT_QUERY = """
 UNWIND $assets AS a
-MERGE (asset:Asset {name: a.name})
+MERGE (asset:Asset {owner: $owner, name: a.name})
 SET asset.environment = a.environment,
     asset.type = 'Docker container',
     asset.internet_facing = a.internet_facing,
@@ -202,7 +215,7 @@ SET asset.environment = a.environment,
     asset.decommissioned_at = null
 WITH asset, a
 CALL (asset, a) {
-  MATCH (repo:Repository {name: a.repository})
+  MATCH (repo:Repository {owner: $owner, name: a.repository})
   MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
     ON CREATE SET deploys.source = $source
 }
@@ -210,14 +223,14 @@ CALL (asset, a) {
 
 DISCOVERY_BACKFILL_QUERY = """
 UNWIND $assets AS a
-MATCH (repo:Repository {name: a.repository})-[:DEPLOYS_TO]->(asset:Asset {name: a.name})
+MATCH (repo:Repository {owner: $owner, name: a.repository})-[:DEPLOYS_TO]->(asset:Asset {owner: $owner, name: a.name})
 MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
 MERGE (vuln)-[affects:AFFECTS]->(asset)
   ON CREATE SET affects.source = 'catalog'
 """
 
 DISCOVERY_DECOMMISSION_QUERY = """
-MATCH (asset:Asset {source: $source})
+MATCH (asset:Asset {owner: $owner, source: $source})
 WHERE NOT asset.name IN $names AND coalesce(asset.status, 'active') <> 'decommissioned'
 SET asset.status = 'decommissioned',
     asset.decommissioned_at = $now
@@ -229,11 +242,12 @@ def _normalize_url(url: str) -> str:
     return url.strip().lower().rstrip("/").removesuffix(".git")
 
 
-def apply_discovery(tx, discovery: DiscoveryIn, now: str) -> dict:
+def apply_discovery(tx, owner: str, discovery: DiscoveryIn, now: str) -> dict:
     repos = {
         _normalize_url(record["url"]): record["name"]
         for record in tx.run(
-            "MATCH (r:Repository) WHERE r.url IS NOT NULL RETURN r.name AS name, r.url AS url"
+            "MATCH (r:Repository {owner: $owner}) WHERE r.url IS NOT NULL RETURN r.name AS name, r.url AS url",
+            owner=owner,
         )
     }
     assets = []
@@ -250,11 +264,12 @@ def apply_discovery(tx, discovery: DiscoveryIn, now: str) -> dict:
             }
         )
     linked = tx.run(
-        DISCOVERY_UPSERT_QUERY, assets=assets, source=discovery.source, now=now
+        DISCOVERY_UPSERT_QUERY, owner=owner, assets=assets, source=discovery.source, now=now
     ).consume().counters
-    backfilled = tx.run(DISCOVERY_BACKFILL_QUERY, assets=assets).consume().counters
+    backfilled = tx.run(DISCOVERY_BACKFILL_QUERY, owner=owner, assets=assets).consume().counters
     decommissioned = tx.run(
         DISCOVERY_DECOMMISSION_QUERY,
+        owner=owner,
         source=discovery.source,
         names=[a["name"] for a in assets],
         now=now,
@@ -269,18 +284,19 @@ def apply_discovery(tx, discovery: DiscoveryIn, now: str) -> dict:
 
 
 @app.post("/assets/discover", dependencies=protected)
-def discover_assets(discovery: DiscoveryIn):
+def discover_assets(discovery: DiscoveryIn, owner: Owner):
     with get_driver().session() as session:
-        return session.execute_write(apply_discovery, discovery, _now())
+        return session.execute_write(apply_discovery, owner, discovery, _now())
 
 
 @app.post("/findings", status_code=201, dependencies=protected)
-def ingest_finding(finding: FindingIngest):
+def ingest_finding(finding: FindingIngest, owner: Owner):
     vuln = finding.vulnerability
-    require_known_repository(finding.repository)
+    require_known_repository(owner, finding.repository)
     with get_driver().session() as session:
         session.execute_write(
             ingest_batch,
+            owner,
             finding.repository,
             finding.asset,
             "manual",
@@ -311,7 +327,7 @@ def update_finding_status(
     current_user: Annotated[dict, Depends(get_current_user)],
 ):
     query = """
-    MATCH (vuln:Vulnerability {id: $id})
+    MATCH (vuln:Vulnerability {owner: $owner, id: $id})
     WITH vuln, vuln.status = $status AS unchanged
     SET vuln.status = $status,
         vuln.status_changed_at = CASE WHEN unchanged THEN vuln.status_changed_at ELSE $now END,
@@ -328,6 +344,7 @@ def update_finding_status(
         record = session.execute_write(
             lambda tx: tx.run(
                 query,
+                owner=current_user["id"],
                 id=" ".join(finding_id.split()).upper(),
                 status=update.status,
                 now=_now(),
@@ -341,10 +358,10 @@ def update_finding_status(
 
 
 @app.get("/findings", dependencies=signed_in)
-def list_findings(status: str = ",".join(ACTIVE_STATUSES)):
+def list_findings(current_user: CurrentUser, status: str = ",".join(ACTIVE_STATUSES)):
     """Return every repository -> vulnerability -> asset chain in the graph."""
     query = """
-    MATCH (repo:Repository)-[:CONTAINS]->(vuln:Vulnerability)
+    MATCH (repo:Repository {owner: $owner})-[:CONTAINS]->(vuln:Vulnerability)
     WHERE $statuses IS NULL OR vuln.status IN $statuses
     OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
     RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
@@ -358,15 +375,17 @@ def list_findings(status: str = ",".join(ACTIVE_STATUSES)):
                 "asset": record["asset"],
                 "risk": asset_risk(record["vulnerability"]["severity"], record["asset"] or {}),
             }
-            for record in session.run(query, statuses=_parse_statuses(status))
+            for record in session.run(
+                query, owner=current_user["id"], statuses=_parse_statuses(status)
+            )
         ]
     return sorted(findings, key=lambda f: f["risk"]["score"], reverse=True)
 
 
 @app.get("/findings/{finding_id}", dependencies=signed_in)
-def get_finding(finding_id: str):
+def get_finding(finding_id: str, current_user: CurrentUser):
     query = """
-    MATCH (vuln:Vulnerability {id: $id})
+    MATCH (vuln:Vulnerability {owner: $owner, id: $id})
     OPTIONAL MATCH (repo:Repository)-[:CONTAINS]->(vuln)
     WITH vuln, collect(DISTINCT repo { .* }) AS repositories
     OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
@@ -374,7 +393,9 @@ def get_finding(finding_id: str):
     """
     db = get_driver()
     with db.session() as session:
-        record = session.run(query, id=" ".join(finding_id.split()).upper()).single()
+        record = session.run(
+            query, owner=current_user["id"], id=" ".join(finding_id.split()).upper()
+        ).single()
 
     if record is None:
         raise HTTPException(status_code=404, detail="Finding not found")
@@ -391,9 +412,9 @@ def get_finding(finding_id: str):
 
 
 @app.get("/assets", dependencies=signed_in)
-def list_assets():
+def list_assets(current_user: CurrentUser):
     query = """
-    MATCH (asset:Asset)
+    MATCH (asset:Asset {owner: $owner})
     OPTIONAL MATCH (vuln:Vulnerability)-[:AFFECTS]->(asset)
     WHERE vuln.status IN $statuses
     RETURN asset { .* } AS asset, collect(vuln.severity) AS severities
@@ -412,14 +433,14 @@ def list_assets():
                     default=None,
                 ),
             }
-            for record in session.run(query, statuses=ACTIVE_STATUSES)
+            for record in session.run(query, owner=current_user["id"], statuses=ACTIVE_STATUSES)
         ]
 
 
 @app.get("/graph", dependencies=signed_in)
-def get_graph(status: str = ",".join(ACTIVE_STATUSES)):
+def get_graph(current_user: CurrentUser, status: str = ",".join(ACTIVE_STATUSES)):
     query = """
-    MATCH (n)
+    MATCH (n {owner: $owner})
     WHERE n:Repository OR n:Asset
        OR (n:Vulnerability AND ($statuses IS NULL OR n.status IN $statuses))
     OPTIONAL MATCH (n)-[r:CONTAINS|AFFECTS]->(m)
@@ -435,7 +456,9 @@ def get_graph(status: str = ",".join(ACTIVE_STATUSES)):
     links: list[dict] = []
     db = get_driver()
     with db.session() as session:
-        for record in session.run(query, statuses=_parse_statuses(status)):
+        for record in session.run(
+            query, owner=current_user["id"], statuses=_parse_statuses(status)
+        ):
             props = dict(record["n"])
             source = node_id(record["label"], props)
             nodes.setdefault(source, {"id": source, "label": record["label"], "properties": props})
@@ -447,15 +470,15 @@ def get_graph(status: str = ",".join(ACTIVE_STATUSES)):
 
 
 @app.post("/scans/failed", status_code=201, dependencies=protected)
-def record_failed_scan(failure: ScanFailureIn):
+def record_failed_scan(failure: ScanFailureIn, owner: Owner):
     repository = RepositoryIn(name=failure.repo_name, url=failure.repo_url)
-    require_known_repository(repository)
+    require_known_repository(owner, repository)
     scan_id = uuid4().hex
     now = _now()
     query = """
-    MERGE (repo:Repository {name: $repo.name})
+    MERGE (repo:Repository {owner: $owner, name: $repo.name})
       ON CREATE SET repo.url = $repo.url
-    CREATE (s:Scan {id: $scan_id, scanner: $scanner, status: 'failed',
+    CREATE (s:Scan {id: $scan_id, owner: $owner, scanner: $scanner, status: 'failed',
                     started_at: $now, finished_at: $now, commit: $commit,
                     error: $error, detail: $detail, partial: false,
                     ingested: 0, resolved: 0, reopened: 0, skipped: 0})
@@ -465,6 +488,7 @@ def record_failed_scan(failure: ScanFailureIn):
         session.execute_write(
             lambda tx: tx.run(
                 query,
+                owner=owner,
                 repo=repository.model_dump(),
                 scan_id=scan_id,
                 scanner=failure.scanner,
@@ -478,9 +502,9 @@ def record_failed_scan(failure: ScanFailureIn):
 
 
 @app.get("/scans/failing", dependencies=signed_in)
-def list_failing_scans():
+def list_failing_scans(current_user: CurrentUser):
     query = """
-    MATCH (s:Scan)-[:SCANNED]->(repo:Repository)
+    MATCH (s:Scan {owner: $owner})-[:SCANNED]->(repo:Repository {owner: $owner})
     WITH repo, s ORDER BY s.started_at DESC
     WITH repo, s.scanner AS scanner, collect(s)[0] AS latest
     WHERE latest.status = 'failed'
@@ -492,13 +516,15 @@ def list_failing_scans():
     ORDER BY failed_at DESC
     """
     with get_driver().session() as session:
-        return [record.data() for record in session.run(query)]
+        return [record.data() for record in session.run(query, owner=current_user["id"])]
 
 
 @app.get("/scans", dependencies=signed_in)
-def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500)):
+def list_scans(
+    current_user: CurrentUser, repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500)
+):
     query = """
-    MATCH (s:Scan)-[:SCANNED]->(repo:Repository)
+    MATCH (s:Scan {owner: $owner})-[:SCANNED]->(repo:Repository {owner: $owner})
     WHERE $repo IS NULL OR repo.name = $repo
     RETURN s { .*, repository: repo.name } AS scan
     ORDER BY s.started_at DESC
@@ -509,18 +535,21 @@ def list_scans(repo: Optional[str] = None, limit: int = Query(50, ge=1, le=500))
             record["scan"]
             for record in session.run(
                 query,
+                owner=current_user["id"],
                 repo=_normalize_key(repo).lower() if repo and repo.strip() else None,
                 limit=limit,
             )
         ]
 
 
-def _load_image_asset(params: IngestParams, report: trivy.TrivyReport) -> AssetIn:
+def _load_image_asset(owner: str, params: IngestParams, report: trivy.TrivyReport) -> AssetIn:
     if not params.asset_name:
         raise HTTPException(status_code=422, detail="asset_name is required in image mode")
     with get_driver().session() as session:
         record = session.run(
-            "MATCH (a:Asset {name: $name}) RETURN a { .* } AS asset", name=params.asset_name
+            "MATCH (a:Asset {owner: $owner, name: $name}) RETURN a { .* } AS asset",
+            owner=owner,
+            name=params.asset_name,
         ).single()
     if record is None:
         raise HTTPException(status_code=422, detail=f"Unknown asset '{params.asset_name}'")
@@ -538,14 +567,14 @@ def _load_image_asset(params: IngestParams, report: trivy.TrivyReport) -> AssetI
 
 
 def _ingest_scan(
-    params: IngestParams, scanner: str, type: str, parse, report, image: bool = False
+    owner: str, params: IngestParams, scanner: str, type: str, parse, report, image: bool = False
 ) -> dict:
     repository = RepositoryIn(
         name=params.repo_name, url=params.repo_url, language=params.repo_language
     )
-    require_known_repository(repository)
+    require_known_repository(owner, repository)
     if image:
-        asset = _load_image_asset(params, report)
+        asset = _load_image_asset(owner, params, report)
         id_prefix = f"{repository.name}:{asset.name}:image"
     else:
         asset_fields = (params.asset_name, params.asset_environment, params.asset_type)
@@ -569,6 +598,7 @@ def _ingest_scan(
     findings, skipped = parse(report, id_prefix)
 
     result = run_scan(
+        owner,
         repository,
         asset,
         scanner,
@@ -583,12 +613,16 @@ def _ingest_scan(
 
 
 @app.post("/ingest/trivy", status_code=201, dependencies=protected)
-def ingest_trivy(report: trivy.TrivyReport, params: Annotated[TrivyIngestParams, Query()]):
+def ingest_trivy(
+    report: trivy.TrivyReport, params: Annotated[TrivyIngestParams, Query()], owner: Owner
+):
     if params.mode == "image":
-        return _ingest_scan(params, "trivy-image", "container", trivy.parse, report, True)
-    return _ingest_scan(params, "trivy", "sca", trivy.parse, report)
+        return _ingest_scan(owner, params, "trivy-image", "container", trivy.parse, report, True)
+    return _ingest_scan(owner, params, "trivy", "sca", trivy.parse, report)
 
 
 @app.post("/ingest/semgrep", status_code=201, dependencies=protected)
-def ingest_semgrep(report: semgrep.SemgrepReport, params: Annotated[IngestParams, Query()]):
-    return _ingest_scan(params, "semgrep", "sast", semgrep.parse, report)
+def ingest_semgrep(
+    report: semgrep.SemgrepReport, params: Annotated[IngestParams, Query()], owner: Owner
+):
+    return _ingest_scan(owner, params, "semgrep", "sast", semgrep.parse, report)
