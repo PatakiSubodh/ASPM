@@ -46,6 +46,12 @@ flowchart LR
 - Keys (`Repository.name`, `Vulnerability.id`, `Asset.name`) are unique-constrained and normalized on ingest (whitespace collapsed; repo/asset names lower-cased, vulnerability ids upper-cased), so re-ingesting merges instead of duplicating.
 - A *finding* is one `Repository → Vulnerability → Asset` chain.
 
+### Data ownership
+
+Every `Repository`, `Vulnerability`, `Asset` and `Scan` node carries an `owner` property (the Supabase user id). Keys are unique per owner, so two users can both have a repository called `api`. Every `GET` route and `PATCH /findings/{id}` only sees the signed-in user's nodes; another user's finding returns 404.
+
+Machine routes (`POST`, `X-API-Key`) write for the owner given in the `?owner=` query parameter, or `ASPM_DEV_OWNER` when it is omitted; with neither they return 422. On startup, if `ASPM_DEV_OWNER` is set, the API assigns any node that has no owner to it and loads `catalog.yaml` for it. Find your id in the Supabase dashboard (Authentication → Users → user UID). This is a bridge until users connect their own GitHub repositories (`frontend/ai-docs/multi-tenant-github-app-plan.md`).
+
 ### Request flow
 
 1. The `scanner` service (or any other client) `POST`s a scanner report or a manual finding to the API with an `X-API-Key` header.
@@ -98,6 +104,7 @@ Stop with `docker compose down` (add `-v` to also delete the graph data).
 | `NEO4J_PASSWORD` | `aspm_dev_password` | `neo4j` (only applied when the data volume is first created), `api` |
 | `API_PORT` | `8000` | Host port for `api` |
 | `WEB_PORT` | `3000` | Host port for `web` |
+| `ASPM_DEV_OWNER` | *(empty)* | `api`: Supabase user id that owns machine-written data (catalog, scanner, discovery, demo seed); see Data ownership |
 | `GITHUB_TOKEN` | *(empty)* | `scanner`: read-only token for private GitHub repositories (`contents: read`); never stored |
 | `SCAN_INTERVAL_MINUTES` | `360` | `scanner`: minutes between scan rounds |
 | `SCAN_ON_START` | `true` | `scanner`: scan immediately on start instead of waiting one interval |
@@ -124,8 +131,8 @@ The same `ASPM_API_KEY` must be in `.env` and `backend/.env`, otherwise the scan
 
 | File | Create from | Set |
 |---|---|---|
-| `.env` | `cp .env.example .env` | `ASPM_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; leave `NEO4J_PASSWORD` as is |
-| `backend/.env` | `cp backend/.env.example backend/.env` | `ASPM_API_KEY` (same value), `SUPABASE_URL` (Supabase Project URL) |
+| `.env` | `cp .env.example .env` | `ASPM_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `ASPM_DEV_OWNER` (your Supabase user id); leave `NEO4J_PASSWORD` as is |
+| `backend/.env` | `cp backend/.env.example backend/.env` | `ASPM_API_KEY` (same value), `SUPABASE_URL` (Supabase Project URL), `ASPM_DEV_OWNER` (your Supabase user id) |
 | `frontend/.env.local` | `cp frontend/.env.local.example frontend/.env.local` | `NEXT_PUBLIC_API_URL=http://localhost:8000`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
 
 (PowerShell: use `Copy-Item` instead of `cp`.)
@@ -290,7 +297,7 @@ frontend/
 
 ## Current limitations
 
-- Pages need a Supabase login, but anyone can sign up and there are no roles; reset emails only reach Supabase org members until custom SMTP is set up; the API checks the login token but every signed-in user can read everything and change any status.
+- Data is isolated per signed-in user, but only one user (`ASPM_DEV_OWNER`) receives scanner, discovery and catalog data until the GitHub App connection is built; anyone can sign up, there are no roles; reset emails only reach Supabase org members until custom SMTP is set up.
 - Scanners: Trivy (dependencies and images) and Semgrep (code); no generic SARIF connector yet.
 - No "Scan now" button yet; scans run on start and on the interval (`docker compose restart scanner` forces a round).
 - Backend ingest lifecycle is covered by pytest (`cd backend && pip install -r requirements-dev.txt && pytest`, needs Neo4j running); no frontend tests or CI yet.
