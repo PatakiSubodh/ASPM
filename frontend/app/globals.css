@@ -153,6 +153,15 @@
   html {
     @apply font-sans;
   }
+  a[href],
+  button:not(:disabled),
+  summary,
+  select:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="checkbox"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]) {
+    @apply cursor-pointer;
+  }
 }
 
 @utility brutal {
