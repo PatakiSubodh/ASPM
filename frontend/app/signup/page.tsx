@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { signUp } from "@/app/auth/actions";
 import { AuthNotice } from "@/components/auth-notice";
+import { PasswordInput } from "@/components/password-input";
 import { OAuthButtons } from "@/components/oauth-buttons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -80,10 +81,9 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
               <Label htmlFor="password" className={FIELD_LABEL}>
                 Password
               </Label>
-              <Input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 autoComplete="new-password"
                 placeholder="••••••••••"
                 className={FIELD_INPUT}
@@ -94,10 +94,9 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
               <Label htmlFor="confirm" className={FIELD_LABEL}>
                 Confirm password
               </Label>
-              <Input
+              <PasswordInput
                 id="confirm"
                 name="confirm"
-                type="password"
                 autoComplete="new-password"
                 placeholder="••••••••••"
                 className={FIELD_INPUT}

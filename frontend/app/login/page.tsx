@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { signIn } from "@/app/auth/actions";
 import { AuthNotice } from "@/components/auth-notice";
+import { PasswordInput } from "@/components/password-input";
 import { OAuthButtons } from "@/components/oauth-buttons";
 
 import { Button } from "@/components/ui/button";
@@ -105,10 +106,9 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
                   Forgot password?
                 </Link>
               </div>
-              <Input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 autoComplete="current-password"
                 placeholder="••••••••••"
                 className={FIELD_INPUT}
