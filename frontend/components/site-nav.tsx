@@ -15,7 +15,7 @@ const LINKS = [
   { href: "/catalog", label: "Catalog" },
 ];
 
-const AUTH_PAGES = ["/login", "/signup"];
+const AUTH_PAGES = ["/login", "/signup", "/forgot-password", "/reset-password"];
 
 export function SiteNav() {
   const pathname = usePathname();

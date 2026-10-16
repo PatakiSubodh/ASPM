@@ -15,11 +15,13 @@ import { BUTTON, FIELD_INPUT, FIELD_LABEL } from "@/lib/auth-styles";
 const ERRORS: Record<string, string> = {
   credentials: "Wrong email or password, or the email is not confirmed yet.",
   oauth: "Google / GitHub sign-in failed. Try again.",
-  confirm: "The confirmation link is invalid or has expired.",
+  confirm: "The email link is invalid or has expired. Request a new one.",
 };
 
 const MESSAGES: Record<string, string> = {
   "check-email": "Check your inbox to confirm your account, then sign in.",
+  "reset-sent": "If an account exists for that email, we've sent a reset link.",
+  "password-updated": "Password updated. Sign in with your new password.",
 };
 
 const HIGHLIGHTS = [
@@ -100,7 +102,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
                   Password
                 </Label>
                 <Link
-                  href="#"
+                  href="/forgot-password"
                   className="font-mono text-[11px] underline decoration-2 underline-offset-4 hover:bg-acid"
                 >
                   Forgot password?

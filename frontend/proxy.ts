@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const AUTH_PAGES = ["/login", "/signup"];
+const AUTH_PAGES = ["/login", "/signup", "/forgot-password"];
 const PUBLIC_PATHS = [...AUTH_PAGES, "/auth/"];
 
 function redirectTo(path: string, request: NextRequest, response: NextResponse) {

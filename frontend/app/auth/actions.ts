@@ -4,6 +4,7 @@ import type { Provider } from "@supabase/supabase-js";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { allowReset, recordReset } from "@/lib/reset-limit";
 import { createClient } from "@/lib/supabase/server";
 
 function credentials(formData: FormData) {
@@ -48,6 +49,34 @@ export async function signInWithGoogle() {
 
 export async function signInWithGithub() {
     await signInWith("github");
+}
+
+export async function requestPasswordReset(formData: FormData) {
+    const email = String(formData.get("email") ?? "").trim();
+    if (!email) redirect("/forgot-password?error=email");
+    if (!allowReset(email)) redirect("/forgot-password?error=limit");
+    const supabase = await createClient();
+    const origin = (await headers()).get("origin");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${origin}/auth/callback?next=/reset-password`,
+    });
+    if (error && /\d+ seconds?/.test(error.message)) redirect("/forgot-password?error=wait");
+    if (error?.status === 429) redirect("/forgot-password?error=rate");
+    if (!error) recordReset(email);
+    redirect("/login?message=reset-sent");
+}
+
+export async function updatePassword(formData: FormData) {
+    if (formData.get("password") !== formData.get("confirm")) {
+        redirect("/reset-password?error=mismatch");
+    }
+    const supabase = await createClient();
+    const { error } = await supabase.auth.updateUser({
+        password: String(formData.get("password") ?? ""),
+    });
+    if (error) redirect("/reset-password?error=update");
+    await supabase.auth.signOut();
+    redirect("/login?message=password-updated");
 }
 
 export async function signOut() {
