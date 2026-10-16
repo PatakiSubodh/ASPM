@@ -48,6 +48,19 @@ export default async function SignupPage({ searchParams }: PageProps<"/signup">)
         </CardHeader>
         <CardContent className="space-y-6 px-6 py-6">
           {errorText && <AuthNotice tone="error">{errorText}</AuthNotice>}
+          {error === "exists" && (
+            <AuthNotice tone="error">
+              An account with this email already exists.{" "}
+              <Link href="/login" className="underline decoration-2 underline-offset-4">
+                Sign in
+              </Link>
+              , or use{" "}
+              <Link href="/forgot-password" className="underline decoration-2 underline-offset-4">
+                Forgot password
+              </Link>{" "}
+              to set or reset your password.
+            </AuthNotice>
+          )}
           <form action={signUp} className="space-y-5" noValidate>
             <div className="space-y-2">
               <Label htmlFor="email" className={FIELD_LABEL}>

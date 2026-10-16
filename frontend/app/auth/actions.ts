@@ -25,8 +25,9 @@ export async function signUp(formData: FormData) {
         redirect("/signup?error=mismatch");
     }
     const supabase = await createClient();
-    const { error } = await supabase.auth.signUp(credentials(formData));
+    const { data, error } = await supabase.auth.signUp(credentials(formData));
     if (error) redirect("/signup?error=signup");
+    if (data.user?.identities?.length === 0) redirect("/signup?error=exists");
     redirect("/login?message=check-email");
 }
 

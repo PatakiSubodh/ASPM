@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { cn } from "@/lib/utils";
 
 export function AuthNotice({
@@ -5,7 +7,7 @@ export function AuthNotice({
     children,
     }: {
     tone: "error" | "info";
-    children: string;
+    children: ReactNode;
     }) {
     return (
         <p
