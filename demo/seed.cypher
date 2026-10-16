@@ -4,7 +4,7 @@ UNWIND [
   {name: 'acme-auth', url: 'https://git.example.com/acme/acme-auth', language: 'Go', scanned: 'P1D'},
   {name: 'acme-reports', url: 'https://git.example.com/acme/acme-reports', language: 'Java', scanned: 'P3D'}
 ] AS r
-MERGE (repo:Repository {name: r.name})
+MERGE (repo:Repository {owner: $owner, name: r.name})
 SET repo.url = r.url,
     repo.language = r.language,
     repo.last_scanned_at = toString(datetime() - duration(r.scanned)),
@@ -17,7 +17,7 @@ UNWIND [
   {name: 'acme-staging-gateway', environment: 'staging', type: 'Docker container', internet_facing: true},
   {name: 'acme-dev-sandbox', environment: 'development', type: 'Virtual machine', internet_facing: false}
 ] AS a
-MERGE (asset:Asset {name: a.name})
+MERGE (asset:Asset {owner: $owner, name: a.name})
 SET asset.environment = a.environment,
     asset.type = a.type,
     asset.internet_facing = a.internet_facing,
@@ -31,7 +31,7 @@ UNWIND [
   ['acme-auth', 'acme-auth-api'],
   ['acme-auth', 'acme-dev-sandbox']
 ] AS d
-MATCH (repo:Repository {name: d[0]}), (asset:Asset {name: d[1]})
+MATCH (repo:Repository {owner: $owner, name: d[0]}), (asset:Asset {owner: $owner, name: d[1]})
 MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
 SET deploys.source = 'demo';
 
@@ -45,9 +45,10 @@ UNWIND [
   {id: 'demo-scan-reports-2', repo: 'acme-reports', scanner: 'trivy', started: 'PT1H', ingested: 0, resolved: 0, reopened: 0,
    status: 'failed', error: "Couldn't clone the repository", detail: 'fatal: could not read Username for https://git.example.com'}
 ] AS s
-MATCH (repo:Repository {name: s.repo})
+MATCH (repo:Repository {owner: $owner, name: s.repo})
 MERGE (scan:Scan {id: s.id})
-SET scan.scanner = s.scanner,
+SET scan.owner = $owner,
+    scan.scanner = s.scanner,
     scan.commit = s.commit,
     scan.partial = false,
     scan.started_at = toString(datetime() - duration(s.started)),
@@ -118,8 +119,8 @@ UNWIND [
    description: 'Log4Shell: JNDI lookups in log messages allow remote code execution (log4j-core 2.14.1, fixed in 2.15.0; pom.xml)',
    first_seen: 'P3D', last_seen: 'P3D', scan: 'demo-scan-reports-1'}
 ] AS v
-MATCH (repo:Repository {name: v.repo})
-MERGE (vuln:Vulnerability {id: v.id})
+MATCH (repo:Repository {owner: $owner, name: v.repo})
+MERGE (vuln:Vulnerability {owner: $owner, id: v.id})
 SET vuln.cve = v.cve,
     vuln.severity = v.severity,
     vuln.description = v.description,
@@ -140,5 +141,5 @@ SET vuln.cve = v.cve,
 MERGE (repo)-[:CONTAINS]->(vuln)
 WITH vuln, v
 UNWIND v.assets AS asset_name
-MATCH (asset:Asset {name: asset_name})
+MATCH (asset:Asset {owner: $owner, name: asset_name})
 MERGE (vuln)-[:AFFECTS]->(asset);

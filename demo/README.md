@@ -1,6 +1,6 @@
 # Demo data
 
-Everything fake lives here. Nothing in `backend/` or `frontend/` creates sample data, and a plain `docker compose up` starts with an empty graph.
+Everything fake lives here. The seed and purge scripts take an `owner` parameter, set from `ASPM_DEV_OWNER` in `.env`: the demo data belongs to that user and no one else sees it. Nothing in `backend/` or `frontend/` creates sample data, and a plain `docker compose up` starts with an empty graph.
 
 | File | What it is |
 |---|---|
@@ -21,7 +21,7 @@ Keep `seed.cypher` in sync with the graph model: a model change and its seed cha
 
 ## Load
 
-Stack and demo data together:
+Set `ASPM_DEV_OWNER` in `.env` first (your Supabase user id). Stack and demo data together:
 
 ```bash
 docker compose --profile demo up -d
@@ -36,7 +36,7 @@ docker compose run --rm demo-seed
 ## Try the Trivy connector
 
 ```bash
-curl -X POST "http://localhost:8000/ingest/trivy?repo_name=acme-sample&repo_url=https://git.example.com/acme/acme-sample&asset_name=acme-sample-api&asset_environment=staging&asset_type=Docker%20container&asset_internet_facing=true" \
+curl -X POST "http://localhost:8000/ingest/trivy?repo_name=acme-sample&repo_url=https://git.example.com/acme/acme-sample&asset_name=acme-sample-api&asset_environment=staging&asset_type=Docker%20container&asset_internet_facing=true&owner=$ASPM_DEV_OWNER" \
   -H "X-API-Key: $ASPM_API_KEY" \
   -H "Content-Type: application/json" \
   --data-binary @demo/trivy-sample.json
@@ -47,7 +47,7 @@ Use exactly `acme-sample` / `acme-sample-api` so `purge.cypher` removes the resu
 ## Purge
 
 ```bash
-docker exec -i aspm-neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" < demo/purge.cypher
+docker exec -i aspm-neo4j cypher-shell -u neo4j -p "$NEO4J_PASSWORD" --param "owner => '$ASPM_DEV_OWNER'" < demo/purge.cypher
 ```
 
-Check: `MATCH (n {demo: true}) RETURN count(n)` returns `0`.
+Check: `MATCH (n {demo: true, owner: '<your id>'}) RETURN count(n)` returns `0`.
