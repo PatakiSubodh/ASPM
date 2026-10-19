@@ -46,6 +46,66 @@ class AssetIn(BaseModel):
         return _normalize_key(v).lower()
 
 
+class AssetUpdate(BaseModel):
+    environment: Optional[str] = None
+    type: Optional[str] = None
+    internet_facing: Optional[bool] = None
+    image: Optional[str] = None
+
+    @model_validator(mode="after")
+    def check_fields(self) -> "AssetUpdate":
+        if not self.model_fields_set:
+            raise ValueError("no fields to update")
+        for field in ("environment", "type", "internet_facing"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} must not be null")
+        return self
+
+
+class RepositoryCreate(BaseModel):
+    name: str
+    url: str
+    language: Optional[str] = None
+    branch: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return _normalize_key(v).lower()
+
+    @field_validator("url")
+    @classmethod
+    def check_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v.startswith(("https://", "http://")):
+            raise ValueError("url must start with https:// or http://")
+        return v
+
+
+class RepositoryUpdate(BaseModel):
+    selected: Optional[bool] = None
+    branch: Optional[str] = None
+
+    @model_validator(mode="after")
+    def check_fields(self) -> "RepositoryUpdate":
+        if not self.model_fields_set:
+            raise ValueError("no fields to update")
+        if "selected" in self.model_fields_set and self.selected is None:
+            raise ValueError("selected must not be null")
+        if self.branch is not None:
+            self.branch = _normalize_key(self.branch)
+        return self
+
+
+class RepositoryAssetsIn(BaseModel):
+    assets: list[str] = []
+
+    @field_validator("assets")
+    @classmethod
+    def normalize_assets(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(_normalize_key(name).lower() for name in v))
+
+
 class FindingIngest(BaseModel):
     repository: RepositoryIn
     vulnerability: VulnerabilityIn

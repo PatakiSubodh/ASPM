@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from neo4j import Driver
+from neo4j.exceptions import ConstraintError
 
 from auth import get_current_user, init_auth
 from connectors import semgrep, trivy
@@ -30,12 +31,16 @@ from models import (
     ACTIVE_STATUSES,
     STATUSES,
     AssetIn,
+    AssetUpdate,
     CatalogIn,
     DiscoveryIn,
     FindingIngest,
     IngestParams,
     TrivyIngestParams,
+    RepositoryAssetsIn,
+    RepositoryCreate,
     RepositoryIn,
+    RepositoryUpdate,
     ScanFailureIn,
     StatusUpdate,
     _normalize_key,
@@ -435,6 +440,213 @@ def list_assets(current_user: CurrentUser):
             }
             for record in session.run(query, owner=current_user["id"], statuses=ACTIVE_STATUSES)
         ]
+
+
+def _path_key(value: str) -> str:
+    try:
+        return _normalize_key(value).lower()
+    except ValueError:
+        raise HTTPException(status_code=422, detail="name must not be blank")
+
+
+REPOSITORY_PROJECTION = "repo { .*, selected: coalesce(repo.selected, true) }"
+
+
+@app.get("/repositories")
+def list_repositories(current_user: CurrentUser):
+    query = f"""
+    MATCH (repo:Repository {{owner: $owner}})
+    OPTIONAL MATCH (repo)-[:DEPLOYS_TO]->(asset:Asset {{owner: $owner}})
+    WITH repo, collect(asset {{ .* }}) AS assets
+    OPTIONAL MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
+    WHERE vuln.status IN $statuses
+    RETURN {REPOSITORY_PROJECTION} AS repository, assets, count(vuln) AS open_total
+    ORDER BY repository.name
+    """
+    with get_driver().session() as session:
+        return [
+            {
+                "repository": record["repository"],
+                "assets": sorted(record["assets"], key=lambda a: a["name"]),
+                "open_total": record["open_total"],
+            }
+            for record in session.run(query, owner=current_user["id"], statuses=ACTIVE_STATUSES)
+        ]
+
+
+@app.post("/repositories", status_code=201)
+def create_repository(repository: RepositoryCreate, current_user: CurrentUser):
+    query = f"""
+    CREATE (repo:Repository {{owner: $owner, source: 'manual', selected: true, created_at: $now}})
+    SET repo += $fields
+    RETURN {REPOSITORY_PROJECTION} AS repository
+    """
+    try:
+        with get_driver().session() as session:
+            record = session.execute_write(
+                lambda tx: tx.run(
+                    query,
+                    owner=current_user["id"],
+                    fields=repository.model_dump(),
+                    now=_now(),
+                ).single()
+            )
+    except ConstraintError:
+        raise HTTPException(status_code=409, detail="Repository already exists")
+    return {"repository": record["repository"]}
+
+
+@app.patch("/repositories/{name}")
+def update_repository(name: str, update: RepositoryUpdate, current_user: CurrentUser):
+    query = f"""
+    MATCH (repo:Repository {{owner: $owner, name: $name}})
+    SET repo += $changes
+    RETURN {REPOSITORY_PROJECTION} AS repository
+    """
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(
+                query,
+                owner=current_user["id"],
+                name=_path_key(name),
+                changes=update.model_dump(exclude_unset=True),
+            ).single()
+        )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return {"repository": record["repository"]}
+
+
+REPOSITORY_ASSETS_PRUNE_QUERY = """
+MATCH (repo:Repository {owner: $owner, name: $name})-[deploys:DEPLOYS_TO]->(asset:Asset)
+WHERE NOT asset.name IN $assets
+CALL (repo, asset) {
+  MATCH (repo)-[:CONTAINS]->(:Vulnerability)-[derived:AFFECTS {source: 'catalog'}]->(asset)
+  DELETE derived
+}
+DELETE deploys
+RETURN count(deploys) AS unlinked
+"""
+
+REPOSITORY_ASSETS_LINK_QUERY = """
+MATCH (repo:Repository {owner: $owner, name: $name})
+UNWIND $assets AS asset_name
+MATCH (asset:Asset {owner: $owner, name: asset_name})
+MERGE (repo)-[deploys:DEPLOYS_TO]->(asset)
+  ON CREATE SET deploys.source = 'manual'
+"""
+
+REPOSITORY_ASSETS_BACKFILL_QUERY = """
+MATCH (repo:Repository {owner: $owner, name: $name})-[:DEPLOYS_TO]->(asset:Asset)
+MATCH (repo)-[:CONTAINS]->(vuln:Vulnerability)
+MERGE (vuln)-[affects:AFFECTS]->(asset)
+  ON CREATE SET affects.source = 'catalog'
+"""
+
+
+def apply_repository_assets(tx, owner: str, name: str, assets: list[str]) -> Optional[dict]:
+    exists = tx.run(
+        "MATCH (repo:Repository {owner: $owner, name: $name}) RETURN count(repo) > 0 AS exists",
+        owner=owner,
+        name=name,
+    ).single()["exists"]
+    if not exists:
+        return None
+    found = {
+        record["name"]
+        for record in tx.run(
+            "MATCH (a:Asset {owner: $owner}) WHERE a.name IN $assets RETURN a.name AS name",
+            owner=owner,
+            assets=assets,
+        )
+    }
+    missing = sorted(set(assets) - found)
+    if missing:
+        return {"missing": missing}
+    unlinked = tx.run(
+        REPOSITORY_ASSETS_PRUNE_QUERY, owner=owner, name=name, assets=assets
+    ).single()["unlinked"]
+    linked = tx.run(
+        REPOSITORY_ASSETS_LINK_QUERY, owner=owner, name=name, assets=assets
+    ).consume().counters
+    backfilled = tx.run(
+        REPOSITORY_ASSETS_BACKFILL_QUERY, owner=owner, name=name
+    ).consume().counters
+    return {
+        "repository": name,
+        "assets": assets,
+        "linked": linked.relationships_created,
+        "unlinked": unlinked,
+        "backfilled": backfilled.relationships_created,
+    }
+
+
+@app.put("/repositories/{name}/assets")
+def set_repository_assets(name: str, body: RepositoryAssetsIn, current_user: CurrentUser):
+    with get_driver().session() as session:
+        result = session.execute_write(
+            apply_repository_assets, current_user["id"], _path_key(name), body.assets
+        )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if "missing" in result:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown assets: {', '.join(result['missing'])}"
+        )
+    return result
+
+
+@app.post("/assets", status_code=201)
+def create_asset(asset: AssetIn, current_user: CurrentUser):
+    query = """
+    CREATE (asset:Asset {owner: $owner, source: 'manual'})
+    SET asset += $fields
+    RETURN asset { .* } AS asset
+    """
+    try:
+        with get_driver().session() as session:
+            record = session.execute_write(
+                lambda tx: tx.run(
+                    query, owner=current_user["id"], fields=asset.model_dump()
+                ).single()
+            )
+    except ConstraintError:
+        raise HTTPException(status_code=409, detail="Asset already exists")
+    return {"asset": record["asset"]}
+
+
+@app.patch("/assets/{name}")
+def update_asset(name: str, update: AssetUpdate, current_user: CurrentUser):
+    query = """
+    MATCH (asset:Asset {owner: $owner, name: $name})
+    SET asset += $changes
+    RETURN asset { .* } AS asset
+    """
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(
+                query,
+                owner=current_user["id"],
+                name=_path_key(name),
+                changes=update.model_dump(exclude_unset=True),
+            ).single()
+        )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return {"asset": record["asset"]}
+
+
+@app.delete("/assets/{name}", status_code=204)
+def delete_asset(name: str, current_user: CurrentUser):
+    query = "MATCH (asset:Asset {owner: $owner, name: $name}) DETACH DELETE asset"
+    with get_driver().session() as session:
+        counters = session.execute_write(
+            lambda tx: tx.run(query, owner=current_user["id"], name=_path_key(name))
+            .consume()
+            .counters
+        )
+    if counters.nodes_deleted == 0:
+        raise HTTPException(status_code=404, detail="Asset not found")
 
 
 @app.get("/graph", dependencies=signed_in)
