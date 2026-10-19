@@ -182,11 +182,11 @@ def test_status_filters(client, repo):
     ingest(client, repo, report("jinja2"))
 
     def ids(status=None):
-        params = {"status": status} if status else {}
+        params = {"q": repo, "limit": 500}
+        if status:
+            params["status"] = status
         return {
-            f["vulnerability"]["id"]
-            for f in client.get("/findings", params=params).json()
-            if f["repository"]["name"] == repo
+            f["vulnerability"]["id"] for f in client.get("/findings", params=params).json()["items"]
         }
 
     assert ids() == {finding_id(repo, "jinja2")}
@@ -198,6 +198,44 @@ def test_status_filters(client, repo):
     node_ids = {n["id"] for n in graph["nodes"]}
     assert f"Vulnerability:{finding_id(repo, 'jinja2')}" in node_ids
     assert f"Vulnerability:{finding_id(repo, 'pyyaml')}" not in node_ids
+
+
+def test_search_matches_cve_package_repo_and_asset(client, repo):
+    ingest(client, repo, report("jinja2", "pyyaml", "requests"))
+
+    def ids(q):
+        return {
+            f["vulnerability"]["id"]
+            for f in client.get("/findings", params={"q": q, "limit": 500}).json()["items"]
+            if f["repository"]["name"] == repo
+        }
+
+    assert ids("CVE-2020-14343") == {finding_id(repo, "pyyaml")}
+    assert ids("Jinja") == {finding_id(repo, "jinja2")}
+    assert ids(f"{repo}-api") == {finding_id(repo, p) for p in PACKAGES}
+    assert ids(repo.upper()) == {finding_id(repo, p) for p in PACKAGES}
+    assert ids("no-such-thing") == set()
+
+
+def test_pagination_returns_pages_and_totals(client, repo):
+    ingest(client, repo, report("jinja2", "pyyaml", "requests"))
+    params = {"q": repo}
+
+    first = client.get("/findings", params={**params, "limit": 2}).json()
+    second = client.get("/findings", params={**params, "limit": 2, "offset": 2}).json()
+
+    assert first["total"] == second["total"] == 3
+    assert (first["limit"], first["offset"], second["offset"]) == (2, 0, 2)
+    assert len(first["items"]) == 2
+    assert len(second["items"]) == 1
+    assert first["counts"] == {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 1, "LOW": 0}
+    ranked = [f["vulnerability"]["id"] for f in first["items"] + second["items"]]
+    assert len(set(ranked)) == 3
+    assert ranked[0] == finding_id(repo, "pyyaml")
+
+    assert client.get("/findings", params={"limit": 0}).status_code == 422
+    assert client.get("/findings", params={"limit": 501}).status_code == 422
+    assert client.get("/findings", params={"offset": -1}).status_code == 422
 
 
 def test_scans_are_recorded_newest_first(client, repo):

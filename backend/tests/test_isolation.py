@@ -36,8 +36,9 @@ def test_same_names_do_not_merge(client, other, repo):
     ingest(client, repo, report("pyyaml", "requests"))
     ingest_other(client, repo, report("pyyaml"))
 
-    mine = client.get("/findings", params={"status": "all"}).json()
-    theirs = client.get("/findings", params={"status": "all"}, headers=other).json()
+    params = {"status": "all", "q": repo, "limit": 500}
+    mine = client.get("/findings", params=params).json()["items"]
+    theirs = client.get("/findings", params=params, headers=other).json()["items"]
     mine_ids = {f["vulnerability"]["id"] for f in mine if f["repository"]["name"] == repo}
     their_ids = {f["vulnerability"]["id"] for f in theirs if f["repository"]["name"] == repo}
     assert mine_ids == {finding_id(repo, "pyyaml"), finding_id(repo, "requests")}
@@ -70,8 +71,11 @@ def test_other_owner_cannot_see_or_change(client, other, repo):
     assert res.status_code == 404
     assert vuln(client, repo, "pyyaml")["status"] == "open"
 
-    findings = client.get("/findings", params={"status": "all"}, headers=other).json()
-    assert all(f["repository"]["name"] != repo for f in findings)
+    findings = client.get(
+        "/findings", params={"status": "all", "q": repo, "limit": 500}, headers=other
+    ).json()
+    assert findings["items"] == []
+    assert findings["total"] == 0
 
     assets = client.get("/assets", headers=other).json()
     assert all(not a["asset"]["name"].startswith(repo) for a in assets)

@@ -104,9 +104,9 @@ def test_unmapping_keeps_explicit_affects(client, repo):
 def test_unmapped_repo_findings_have_no_asset(client, repo):
     scan(client, repo, report("requests"), repo_url=f"https://git.example.com/{repo}")
 
-    res = client.get("/findings")
+    res = client.get("/findings", params={"q": repo, "limit": 500})
     assert res.status_code == 200, res.text
-    rows = [f for f in res.json() if f["repository"]["name"] == repo]
+    rows = [f for f in res.json()["items"] if f["repository"]["name"] == repo]
     assert len(rows) == 1
     assert rows[0]["asset"] is None
 

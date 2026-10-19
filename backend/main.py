@@ -363,14 +363,26 @@ def update_finding_status(
 
 
 @app.get("/findings", dependencies=signed_in)
-def list_findings(current_user: CurrentUser, status: str = ",".join(ACTIVE_STATUSES)):
-    """Return every repository -> vulnerability -> asset chain in the graph."""
+def list_findings(
+    current_user: CurrentUser,
+    status: str = ",".join(ACTIVE_STATUSES),
+    q: Optional[str] = Query(None, max_length=200),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Return a page of repository -> vulnerability -> asset chains, ranked by risk."""
     query = """
     MATCH (repo:Repository {owner: $owner})-[:CONTAINS]->(vuln:Vulnerability)
     WHERE $statuses IS NULL OR vuln.status IN $statuses
     OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
+    WITH repo, vuln, asset
+    WHERE $q IS NULL OR any(
+        value IN [vuln.id, vuln.cve, vuln.package, repo.name, asset.name]
+        WHERE value IS NOT NULL AND toLower(value) CONTAINS $q
+    )
     RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
     """
+    needle = (q or "").strip().lower() or None
     db = get_driver()
     with db.session() as session:
         findings = [
@@ -381,10 +393,27 @@ def list_findings(current_user: CurrentUser, status: str = ",".join(ACTIVE_STATU
                 "risk": asset_risk(record["vulnerability"]["severity"], record["asset"] or {}),
             }
             for record in session.run(
-                query, owner=current_user["id"], statuses=_parse_statuses(status)
+                query, owner=current_user["id"], statuses=_parse_statuses(status), q=needle
             )
         ]
-    return sorted(findings, key=lambda f: f["risk"]["score"], reverse=True)
+    findings.sort(
+        key=lambda f: (
+            -f["risk"]["score"],
+            f["vulnerability"]["id"],
+            (f["asset"] or {}).get("name", ""),
+        )
+    )
+    counts = {severity: 0 for severity in SEVERITIES}
+    for finding in findings:
+        severity = finding["vulnerability"]["severity"]
+        counts[severity] = counts.get(severity, 0) + 1
+    return {
+        "items": findings[offset : offset + limit],
+        "total": len(findings),
+        "counts": counts,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @app.get("/findings/{finding_id}", dependencies=signed_in)
