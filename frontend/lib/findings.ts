@@ -108,6 +108,14 @@ export interface Finding {
   risk: Risk;
 }
 
+export interface FindingsPage {
+  items: Finding[];
+  total: number;
+  counts: Record<Severity, number>;
+  limit: number;
+  offset: number;
+}
+
 export interface FindingDetail {
   vulnerability: Vulnerability;
   repositories: Repository[];
@@ -150,6 +158,10 @@ export interface FailingScan {
 
 export function findingHref(id: string): string {
   return `/findings/${encodeURIComponent(id)}`;
+}
+
+export function graphHref(id: string): string {
+  return `/graph?focus=${encodeURIComponent(`Vulnerability:${id}`)}`;
 }
 
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

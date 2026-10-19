@@ -1,4 +1,4 @@
-import { ArrowRight, ArrowUpRight } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Network, Search } from "lucide-react";
 import Link from "next/link";
 
 import { RiskBadge } from "@/components/risk-badge";
@@ -16,11 +16,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiHeaders } from "@/lib/api";
-import { type FailingScan, type Finding, findingHref, relativeTime } from "@/lib/findings";
-import { SEVERITIES, type Severity, severityBg } from "@/lib/graph";
+import {
+  type FailingScan,
+  findingHref,
+  type FindingsPage,
+  graphHref,
+  relativeTime,
+} from "@/lib/findings";
+import { SEVERITIES, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const PAGE_SIZE = 50;
 
 const FILTERS = [
   { value: "active", label: "Active" },
@@ -30,9 +38,27 @@ const FILTERS = [
   { value: "all", label: "All" },
 ];
 
-async function getFindings(status: string): Promise<Finding[]> {
-  const query = status === "active" ? "" : `?status=${encodeURIComponent(status)}`;
-  const res = await fetch(`${API_URL}/findings${query}`, {
+function pageHref(status: string, q: string, page: number): string {
+  const params = new URLSearchParams();
+  if (status !== "active") params.set("status", status);
+  if (q) params.set("q", q);
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/?${query}` : "/";
+}
+
+async function getFindings(
+  status: string,
+  q: string,
+  page: number,
+): Promise<FindingsPage> {
+  const params = new URLSearchParams({
+    limit: String(PAGE_SIZE),
+    offset: String((page - 1) * PAGE_SIZE),
+  });
+  if (status !== "active") params.set("status", status);
+  if (q) params.set("q", q);
+  const res = await fetch(`${API_URL}/findings?${params}`, {
     cache: "no-store",
     headers: await apiHeaders(),
   });
@@ -55,33 +81,28 @@ async function getFailingScans(): Promise<FailingScan[]> {
 }
 
 export default async function Home({ searchParams }: PageProps<"/">) {
-  const { status: rawStatus } = await searchParams;
+  const { status: rawStatus, q: rawQ, page: rawPage } = await searchParams;
   const status =
     FILTERS.find((f) => f.value === rawStatus)?.value ?? FILTERS[0].value;
-  let findings: Finding[] = [];
+  const q = (typeof rawQ === "string" ? rawQ : "").trim().slice(0, 200);
+  const page = Math.max(1, Number.parseInt(String(rawPage), 10) || 1);
+  let result: FindingsPage | null = null;
   let error: string | null = null;
   const failingPromise = getFailingScans();
 
   try {
-    findings = await getFindings(status);
+    result = await getFindings(status, q, page);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
   const failing = await failingPromise;
 
-  findings.sort(
-    (a, b) =>
-      b.risk.score - a.risk.score ||
-      SEVERITIES.indexOf(a.vulnerability.severity) -
-        SEVERITIES.indexOf(b.vulnerability.severity),
-  );
-
-  const counts = Object.fromEntries(
-    SEVERITIES.map((s) => [
-      s,
-      findings.filter((f) => f.vulnerability.severity === s).length,
-    ]),
-  ) as Record<Severity, number>;
+  const findings = result?.items ?? [];
+  const total = result?.total ?? 0;
+  const counts = result?.counts;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const firstRow = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const lastRow = Math.min(total, page * PAGE_SIZE);
 
   return (
     <div className="space-y-12">
@@ -110,11 +131,43 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       {!error && <ScanWarning failing={failing} />}
 
       {!error && (
+        <form action="/" method="get" className="animate-rise flex flex-wrap gap-3">
+          {status !== "active" && <input type="hidden" name="status" value={status} />}
+          <div className="relative min-w-64 flex-1 sm:max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2" />
+            <input
+              type="search"
+              name="q"
+              defaultValue={q}
+              maxLength={200}
+              placeholder="Search CVE, package, repo or asset"
+              aria-label="Search findings"
+              className="h-10 w-full border-2 border-foreground bg-card pl-9 pr-3 font-mono text-xs shadow-brutal-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid"
+            />
+          </div>
+          <button
+            type="submit"
+            className="brutal-lift h-10 border-2 border-foreground bg-acid px-4 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
+          >
+            Search
+          </button>
+          {q && (
+            <Link
+              href={pageHref(status, "", 1)}
+              className="brutal-lift inline-flex h-10 items-center border-2 border-foreground bg-card px-4 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
+            >
+              Clear
+            </Link>
+          )}
+        </form>
+      )}
+
+      {!error && (
         <nav className="animate-rise flex flex-wrap gap-3">
           {FILTERS.map(({ value, label }) => (
             <Link
               key={value}
-              href={value === "active" ? "/" : `/?status=${value}`}
+              href={pageHref(value, q, 1)}
               aria-current={value === status ? "page" : undefined}
               className={cn(
                 "brutal-lift border-2 border-foreground px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm",
@@ -130,15 +183,17 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       {!error && findings.length === 0 && (
         <StateCard
           tone="empty"
-          title={status === "active" ? "Nothing exposed" : "No matches"}
+          title={status === "active" && !q ? "Nothing exposed" : "No matches"}
         >
-          {status === "active"
-            ? "No open findings right now. New issues appear here as soon as a scan reports them."
-            : "No findings with this status. Try another filter."}
+          {q
+            ? `No findings match "${q}" with this status. Try another search or filter.`
+            : status === "active"
+              ? "No open findings right now. New issues appear here as soon as a scan reports them."
+              : "No findings with this status. Try another filter."}
         </StateCard>
       )}
 
-      {!error && findings.length > 0 && (
+      {!error && findings.length > 0 && counts && (
         <>
           <section className="grid grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-6">
             {SEVERITIES.map((severity, i) => (
@@ -147,13 +202,13 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                 style={{ animationDelay: `${80 + i * 60}ms` }}
                 className={cn(
                   "brutal brutal-lift animate-rise gap-1 px-5 py-4",
-                  counts[severity] > 0
+                  (counts[severity] ?? 0) > 0
                     ? severityBg[severity]
                     : "bg-card text-muted-foreground",
                 )}
               >
                 <span className="text-5xl font-bold tabular-nums tracking-tighter">
-                  {String(counts[severity]).padStart(2, "0")}
+                  {String(counts[severity] ?? 0).padStart(2, "0")}
                 </span>
                 <span className="font-mono text-[11px] font-bold uppercase tracking-widest">
                   {severity}
@@ -214,6 +269,13 @@ export default async function Home({ searchParams }: PageProps<"/">) {
                         <p className="mt-1 text-sm leading-snug text-muted-foreground">
                           {f.vulnerability.description}
                         </p>
+                        <Link
+                          href={graphHref(f.vulnerability.id)}
+                          className="mt-2 inline-flex items-center gap-1 font-mono text-[11px] font-bold uppercase tracking-widest underline decoration-2 underline-offset-4 hover:bg-acid"
+                        >
+                          <Network className="size-3.5" />
+                          Show on graph
+                        </Link>
                       </TableCell>
                       <TableCell className="px-4 py-5 align-top">
                         <div className="flex items-center gap-2 font-mono text-sm">
@@ -282,6 +344,33 @@ export default async function Home({ searchParams }: PageProps<"/">) {
               </Table>
             </CardContent>
           </Card>
+
+          <nav
+            aria-label="Pagination"
+            className="animate-rise flex flex-wrap items-center justify-between gap-4"
+          >
+            <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
+              {firstRow}–{lastRow} of {total} · page {page} / {pageCount}
+            </p>
+            <div className="flex gap-3">
+              {page > 1 && (
+                <Link
+                  href={pageHref(status, q, page - 1)}
+                  className="brutal-lift border-2 border-foreground bg-card px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
+                >
+                  ← Prev
+                </Link>
+              )}
+              {page < pageCount && (
+                <Link
+                  href={pageHref(status, q, page + 1)}
+                  className="brutal-lift border-2 border-foreground bg-acid px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
+                >
+                  Next →
+                </Link>
+              )}
+            </div>
+          </nav>
         </>
       )}
     </div>
