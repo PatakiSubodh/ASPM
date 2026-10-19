@@ -12,7 +12,7 @@ Everything fake lives here. The seed and purge scripts take an `owner` parameter
 
 - 4 repositories (`acme-*`), 5 assets across production, staging and development, internet-facing and internal.
 - 11 findings: all four severities, P1 to P4, every status (`open`, `in_progress`, `resolved`, `accepted_risk`, `false_positive`), SCA and SAST types.
-- `DEPLOYS_TO` edges (`source: 'demo'`) for the `/catalog` page; `POST /catalog` and the startup catalog load never prune them.
+- `DEPLOYS_TO` edges (`source: 'demo'`) for the `/repositories` page; `POST /catalog` and the startup catalog load never prune them.
 - `acme-reports` has no deployed asset, so its Log4Shell finding is unmapped.
 - `acme-staging-gateway` is shared by `acme-payments` and `acme-storefront`.
 - 7 scan runs with ingested / resolved / reopened counts: 6 succeeded, 1 failed (`acme-reports`, clone error), so the "wasn't scanned" warning shows on `/`.
