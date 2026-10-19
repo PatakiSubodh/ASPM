@@ -41,6 +41,9 @@ services:
       - CATALOG_PATH=/app/catalog.yaml
       - ASPM_DEV_OWNER=${ASPM_DEV_OWNER:-}
       - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - GITHUB_APP_ID=${GITHUB_APP_ID:-}
+      - GITHUB_APP_SLUG=${GITHUB_APP_SLUG:-}
+      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY:-}
     volumes:
       - ./catalog.yaml:/app/catalog.yaml:ro
     depends_on:
