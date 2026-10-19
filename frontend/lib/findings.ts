@@ -58,6 +58,8 @@ export interface Repository {
   url: string;
   language?: string;
   branch?: string;
+  selected?: boolean;
+  source?: string;
   last_scanned_at?: string;
 }
 

@@ -82,6 +82,10 @@ def test_update_repository(client, repo):
     assert res.json()["repository"]["selected"] is False
     assert res.json()["repository"]["branch"] == "dev"
 
+    cleared = client.patch(f"/repositories/{repo}", json={"branch": None})
+    assert cleared.status_code == 200, cleared.text
+    assert "branch" not in cleared.json()["repository"]
+
     assert client.patch(f"/repositories/{repo}", json={}).status_code == 422
     assert client.patch(f"/repositories/{repo}", json={"selected": None}).status_code == 422
     assert client.patch(f"/repositories/{repo}-nope", json={"selected": True}).status_code == 404

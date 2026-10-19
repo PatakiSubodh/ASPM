@@ -13,7 +13,7 @@ const LINKS = [
   { href: "/graph", label: "Graph", note: "Code → cloud, as a map" },
   { href: "/assets", label: "Assets", note: "What runs where, by risk" },
   { href: "/scans", label: "Scans", note: "Every scan run and result" },
-  { href: "/catalog", label: "Catalog", note: "Repos and where they deploy" },
+  { href: "/repositories", label: "Repositories", note: "Repos, assets and where they deploy" },
 ];
 
 const AUTH_PAGES = ["/login", "/signup", "/forgot-password", "/reset-password"];
