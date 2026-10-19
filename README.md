@@ -273,7 +273,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
 | `/assets` | Asset inventory ranked by risk |
 | `/scans` | Scan history with result (done / failed with reason) and ingested / resolved / reopened counts |
-| `/repositories` | Repositories page: add a repository by URL, turn scanning on or off, choose the assets each repository deploys to, and create, edit or delete assets |
+| `/repositories` | Repositories page with a three-step guide for new users: add a repository (dialog), add assets (dialog with environment and type selects), link them (side sheet); per-row menus for branch, edit and delete |
 
 ## Project layout
 
