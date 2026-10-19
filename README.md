@@ -50,7 +50,7 @@ flowchart LR
 
 Every `Repository`, `Vulnerability`, `Asset` and `Scan` node carries an `owner` property (the Supabase user id). Keys are unique per owner, so two users can both have a repository called `api`. Every `GET` route and `PATCH /findings/{id}` only sees the signed-in user's nodes; another user's finding returns 404.
 
-Machine routes (`POST`, `X-API-Key`) write for the owner given in the `?owner=` query parameter, or `ASPM_DEV_OWNER` when it is omitted; with neither they return 422. On startup, if `ASPM_DEV_OWNER` is set, the API assigns any node that has no owner to it and loads `catalog.yaml` for it. Find your id in the Supabase dashboard (Authentication → Users → user UID). This is a bridge until users connect their own GitHub repositories (`frontend/ai-docs/multi-tenant-github-app-plan.md`).
+Machine routes (`POST`, `X-API-Key`) write for the owner given in the `?owner=` query parameter, or `ASPM_DEV_OWNER` when it is omitted; with neither they return 422. On startup, if `ASPM_DEV_OWNER` is set, the API assigns any node that has no owner to it and loads `catalog.yaml` for it. Find your id in the Supabase dashboard (Authentication → Users → user UID). This is a bridge until users connect their own GitHub repositories (`docs/auth/multi-tenant-github-app-plan.md`).
 
 ### Request flow
 
