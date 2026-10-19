@@ -234,7 +234,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 
 ## API
 
-`GET` routes and `PATCH /findings/{id}` need a signed-in user (`Authorization: Bearer <Supabase access token>`); the first request creates a `(:User)` node and status changes record `status_changed_by`. `POST` routes are for machines and need `X-API-Key`. `/health` is open.
+`GET` routes, `PATCH /findings/{id}` and the user-facing repository and asset routes (`/repositories`, `POST/PATCH/DELETE /assets`) need a signed-in user (`Authorization: Bearer <Supabase access token>`); the first request creates a `(:User)` node and status changes record `status_changed_by`. The other `POST` routes are for machines and need `X-API-Key`. `/health` is open.
 
 | Method | Path | Description |
 |---|---|---|
@@ -252,6 +252,13 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `POST` | `/ingest/semgrep` | Ingest a Semgrep JSON report the same way (SAST findings) |
 | `POST` | `/catalog` | Upsert repositories and their `DEPLOYS_TO` assets; returns `{repositories, assets, linked, unlinked, backfilled}` |
 | `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
+| `GET` | `/repositories` | The caller's repositories with `selected`, deployed assets, open count and last scan time |
+| `POST` | `/repositories` | Add a repository `{name, url, language?, branch?}` (`source: manual`, `selected: true`); 409 if the name exists |
+| `PATCH` | `/repositories/{name}` | Set `selected` and/or `branch` |
+| `PUT` | `/repositories/{name}/assets` | Replace the assets the repository deploys to (`{assets: [names]}`, empty = unmapped); unknown asset names → 422; existing findings are re-linked; returns `{repository, assets, linked, unlinked, backfilled}` |
+| `POST` | `/assets` | Create an asset `{name, environment, type, internet_facing?, image?}` (`source: manual`); 409 if the name exists |
+| `PATCH` | `/assets/{name}` | Change `environment`, `type`, `internet_facing` or `image` |
+| `DELETE` | `/assets/{name}` | Delete an asset and its links (204) |
 | `POST` | `/assets/discover` | Upsert runtime assets `{source, assets: [{name, image, labels}]}` and link them to repositories by `org.opencontainers.image.source`; marks assets of the same `source` that were not posted `decommissioned`; returns `{assets, linked, unmatched, backfilled, decommissioned}` |
 
 ## UI
