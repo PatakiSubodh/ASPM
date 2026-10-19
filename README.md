@@ -240,7 +240,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 |---|---|---|
 | `GET` | `/health` | Liveness |
 | `POST` | `/findings` | Ingest one repository → vulnerability → asset chain (`scanner = manual`) |
-| `GET` | `/findings` | Findings with risk, sorted by risk; `?status=` (default `open,in_progress`, `all` for everything); includes findings with no asset |
+| `GET` | `/findings` | One page of findings with risk, sorted by risk, as `{items, total, counts, limit, offset}`; `?status=` (default `open,in_progress`, `all` for everything), `?q=` (CVE, id, package, repo or asset name), `?limit=` (default 50, max 500), `?offset=`; includes findings with no asset |
 | `GET` | `/findings/{id}` | One vulnerability with its repositories, assets and per-asset risk |
 | `PATCH` | `/findings/{id}` | Set status: `open`, `in_progress`, `resolved`, `accepted_risk`, `false_positive` |
 | `GET` | `/assets` | Assets with open / in-progress vulnerability counts per severity and worst risk |
