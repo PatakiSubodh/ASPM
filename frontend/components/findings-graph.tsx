@@ -1,7 +1,8 @@
 "use client";
 
 import { forceX, forceY } from "d3-force";
-import { Maximize2, Shuffle, SlidersHorizontal, X } from "lucide-react";
+import { ArrowUpRight, Maximize2, Shuffle, SlidersHorizontal, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, {
   type ForceGraphMethods,
@@ -9,10 +10,11 @@ import ForceGraph2D, {
 } from "react-force-graph-2d";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { findingHref } from "@/lib/findings";
 import {
   ACID,
   FADED,
@@ -76,14 +78,23 @@ function tracePath(
   }
 }
 
-export default function FindingsGraph({ data }: { data: GraphData }) {
+export default function FindingsGraph({
+  data,
+  focusId: initialFocusId = null,
+}: {
+  data: GraphData;
+  focusId?: string | null;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<ForceGraphMethods<Node> | undefined>(undefined);
   const fittedRef = useRef(false);
   const mountedAtRef = useRef(0);
+  const focusedRef = useRef(false);
   const [width, setWidth] = useState(0);
   const [monoFont, setMonoFont] = useState("monospace");
-  const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [selected, setSelected] = useState<GraphNode | null>(
+    () => data.nodes.find((n) => n.id === initialFocusId) ?? null,
+  );
   const [hovered, setHovered] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(DEFAULTS);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -139,6 +150,16 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
     }
     return counts;
   }, [data.links]);
+
+  const centreOnFocus = () => {
+    const target = graphData.nodes.find((n) => n.id === initialFocusId) as
+      | Node
+      | undefined;
+    if (!target || target.x === undefined || target.y === undefined) return false;
+    graphRef.current?.centerAt(target.x, target.y, 600);
+    graphRef.current?.zoom(4, 600);
+    return true;
+  };
 
   const radius = (id: string) =>
     (4 + Math.sqrt(degree.get(id) ?? 0) * 3) * settings.nodeSize;
@@ -233,7 +254,7 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
               cooldownTime={20000}
               warmupTicks={120}
               onEngineTick={() => {
-                if (fittedRef.current) return;
+                if (fittedRef.current || initialFocusId) return;
                 if (performance.now() - mountedAtRef.current > 2500) {
                   fittedRef.current = true;
                   return;
@@ -243,6 +264,10 @@ export default function FindingsGraph({ data }: { data: GraphData }) {
               onEngineStop={() => {
                 if (fittedRef.current) return;
                 fittedRef.current = true;
+                if (!focusedRef.current && initialFocusId) {
+                  focusedRef.current = true;
+                  if (centreOnFocus()) return;
+                }
                 graphRef.current?.zoomToFit(600, 70);
               }}
               linkWidth={(l) =>
@@ -545,6 +570,18 @@ function NodeDetails({
         <div className="break-words text-2xl font-bold leading-tight tracking-tight">
           {nodeTitle(node)}
         </div>
+        {node.label === "Vulnerability" && (
+          <Link
+            href={findingHref(String(node.properties.id))}
+            className={cn(
+              buttonVariants({ variant: "outline", size: "lg" }),
+              "brutal brutal-lift w-full bg-acid font-mono text-xs font-bold uppercase tracking-widest shadow-brutal-sm hover:bg-acid",
+            )}
+          >
+            Open details
+            <ArrowUpRight />
+          </Link>
+        )}
         <dl className="divide-y-2 divide-dashed divide-foreground/20">
           {Object.entries(node.properties).map(([key, value]) => (
             <div key={key} className="grid grid-cols-[96px_1fr] gap-3 py-2 text-sm">

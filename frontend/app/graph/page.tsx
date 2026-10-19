@@ -5,8 +5,9 @@ import type { GraphData } from "@/lib/graph";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-async function getGraph(): Promise<GraphData> {
-  const res = await fetch(`${API_URL}/graph`, {
+async function getGraph(focus: string | null): Promise<GraphData> {
+  const query = focus ? "?status=all" : "";
+  const res = await fetch(`${API_URL}/graph${query}`, {
     cache: "no-store",
     headers: await apiHeaders(),
   });
@@ -16,12 +17,14 @@ async function getGraph(): Promise<GraphData> {
   return res.json();
 }
 
-export default async function GraphPage() {
+export default async function GraphPage({ searchParams }: PageProps<"/graph">) {
+  const { focus: rawFocus } = await searchParams;
+  const focus = typeof rawFocus === "string" && rawFocus ? rawFocus : null;
   let graph: GraphData | null = null;
   let error: string | null = null;
 
   try {
-    graph = await getGraph();
+    graph = await getGraph(focus);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
@@ -63,7 +66,9 @@ export default async function GraphPage() {
         </StateCard>
       )}
 
-      {graph && graph.nodes.length > 0 && <FindingsGraph data={graph} />}
+      {graph && graph.nodes.length > 0 && (
+        <FindingsGraph key={focus ?? ""} data={graph} focusId={focus} />
+      )}
     </div>
   );
 }

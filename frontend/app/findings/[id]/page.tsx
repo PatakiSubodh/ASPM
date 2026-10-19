@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowRight, ArrowUpRight } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUpRight, Network } from "lucide-react";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { RiskBadge } from "@/components/risk-badge";
@@ -11,6 +12,7 @@ import { apiHeaders } from "@/lib/api";
 import {
   type Asset,
   type FindingDetail,
+  graphHref,
   type Repository,
   type Risk,
   relativeTime,
@@ -81,6 +83,13 @@ export default async function FindingPage({
               {vuln.severity}
             </Badge>
             <StatusBadge status={vuln.status} />
+            <Link
+              href={graphHref(vuln.id)}
+              className="inline-flex items-center gap-1 font-mono text-sm font-bold underline decoration-2 underline-offset-4 hover:bg-acid"
+            >
+              <Network className="size-3.5" />
+              Show on graph
+            </Link>
             {vuln.cve && (
               <a
                 href={`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(vuln.cve)}`}
