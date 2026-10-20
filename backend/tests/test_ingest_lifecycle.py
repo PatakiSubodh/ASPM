@@ -238,6 +238,40 @@ def test_pagination_returns_pages_and_totals(client, repo):
     assert client.get("/findings", params={"offset": -1}).status_code == 422
 
 
+def test_filters_narrow_findings_and_combine(client, repo):
+    ingest(client, repo, report("jinja2", "pyyaml", "requests"))
+
+    def ids(**filters):
+        res = client.get("/findings", params={"q": repo, "limit": 500, **filters})
+        assert res.status_code == 200, res.text
+        return {f["vulnerability"]["id"] for f in res.json()["items"]}
+
+    assert ids(severity="critical") == {finding_id(repo, "pyyaml")}
+    assert ids(severity="CRITICAL,HIGH") == {finding_id(repo, p) for p in ("pyyaml", "requests")}
+    assert ids(priority="P1") == {finding_id(repo, p) for p in ("pyyaml", "requests")}
+    assert ids(priority="p2") == {finding_id(repo, "jinja2")}
+    assert ids(priority="P3,P4") == set()
+    assert ids(environment="Production") == {finding_id(repo, p) for p in PACKAGES}
+    assert ids(environment="staging") == set()
+    assert ids(internet_facing="true") == {finding_id(repo, p) for p in PACKAGES}
+    assert ids(internet_facing="false") == set()
+    assert ids(scanner="trivy") == {finding_id(repo, p) for p in PACKAGES}
+    assert ids(scanner="semgrep") == set()
+    assert ids(repo=repo.upper()) == {finding_id(repo, p) for p in PACKAGES}
+    assert ids(severity="HIGH", priority="P2") == set()
+    assert ids(severity="HIGH", environment="production", internet_facing="true") == {
+        finding_id(repo, "requests")
+    }
+
+    filtered = client.get("/findings", params={"q": repo, "severity": "HIGH"}).json()
+    assert filtered["total"] == 1
+    assert filtered["counts"] == {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 0, "LOW": 0}
+
+    assert client.get("/findings", params={"severity": "bogus"}).status_code == 422
+    assert client.get("/findings", params={"priority": "P9"}).status_code == 422
+    assert client.get("/findings", params={"internet_facing": "maybe"}).status_code == 422
+
+
 def test_scans_are_recorded_newest_first(client, repo):
     first = ingest(client, repo, report("jinja2", "pyyaml"), commit="abc123")
     second = ingest(client, repo, report("jinja2"), commit="def456")

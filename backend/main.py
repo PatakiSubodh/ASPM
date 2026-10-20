@@ -108,6 +108,17 @@ def _parse_statuses(status: str) -> Optional[list[str]]:
     return statuses
 
 
+def _parse_filter(
+    value: Optional[str], name: str, allowed: Optional[tuple] = None, upper: bool = False
+) -> Optional[list[str]]:
+    items = [i.strip() for i in (value or "").split(",") if i.strip()]
+    items = [i.upper() if upper else i.lower() for i in items]
+    invalid = [i for i in items if allowed is not None and i not in allowed]
+    if invalid:
+        raise HTTPException(status_code=422, detail=f"Invalid {name} filter: {value}")
+    return items or None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -367,6 +378,12 @@ def list_findings(
     current_user: CurrentUser,
     status: str = ",".join(ACTIVE_STATUSES),
     q: Optional[str] = Query(None, max_length=200),
+    severity: Optional[str] = Query(None, max_length=100),
+    priority: Optional[str] = Query(None, max_length=100),
+    environment: Optional[str] = Query(None, max_length=200),
+    internet_facing: Optional[bool] = None,
+    scanner: Optional[str] = Query(None, max_length=200),
+    repo: Optional[str] = Query(None, max_length=500),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -376,10 +393,15 @@ def list_findings(
     WHERE $statuses IS NULL OR vuln.status IN $statuses
     OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
     WITH repo, vuln, asset
-    WHERE $q IS NULL OR any(
+    WHERE ($q IS NULL OR any(
         value IN [vuln.id, vuln.cve, vuln.package, repo.name, asset.name]
         WHERE value IS NOT NULL AND toLower(value) CONTAINS $q
-    )
+    ))
+      AND ($severities IS NULL OR vuln.severity IN $severities)
+      AND ($scanners IS NULL OR toLower(vuln.scanner) IN $scanners)
+      AND ($repos IS NULL OR toLower(repo.name) IN $repos)
+      AND ($environments IS NULL OR toLower(asset.environment) IN $environments)
+      AND ($internet_facing IS NULL OR coalesce(asset.internet_facing, false) = $internet_facing)
     RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
     """
     needle = (q or "").strip().lower() or None
@@ -393,9 +415,20 @@ def list_findings(
                 "risk": asset_risk(record["vulnerability"]["severity"], record["asset"] or {}),
             }
             for record in session.run(
-                query, owner=current_user["id"], statuses=_parse_statuses(status), q=needle
+                query,
+                owner=current_user["id"],
+                statuses=_parse_statuses(status),
+                q=needle,
+                severities=_parse_filter(severity, "severity", SEVERITIES, upper=True),
+                scanners=_parse_filter(scanner, "scanner"),
+                repos=_parse_filter(repo, "repo"),
+                environments=_parse_filter(environment, "environment"),
+                internet_facing=internet_facing,
             )
         ]
+    priorities = _parse_filter(priority, "priority", ("P1", "P2", "P3", "P4"), upper=True)
+    if priorities:
+        findings = [f for f in findings if f["risk"]["priority"] in priorities]
     findings.sort(
         key=lambda f: (
             -f["risk"]["score"],
