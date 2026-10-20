@@ -1,4 +1,4 @@
-import type { Severity } from "@/lib/graph";
+import { SEVERITIES, type Severity } from "@/lib/graph";
 
 export const PRIORITIES = ["P1", "P2", "P3", "P4"] as const;
 
@@ -164,7 +164,54 @@ export function graphHref(id: string): string {
   return `/graph?focus=${encodeURIComponent(`Vulnerability:${id}`)}`;
 }
 
-const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+export const SCANNERS = ["trivy", "semgrep"] as const;
+
+export const FILTER_KEYS = [
+  "severity",
+  "priority",
+  "environment",
+  "internet_facing",
+  "scanner",
+  "repo",
+] as const;
+
+export type FilterKey = (typeof FILTER_KEYS)[number];
+
+export type Filters = Partial<Record<FilterKey, string>>;
+
+const FILTER_OPTIONS: Partial<Record<FilterKey, readonly string[]>> = {
+  severity: SEVERITIES,
+  priority: PRIORITIES,
+  internet_facing: ["true", "false"],
+  scanner: SCANNERS,
+};
+
+export function parseFilters(
+  raw: Record<string, string | string[] | undefined>,
+): Filters {
+  const filters: Filters = {};
+  for (const key of FILTER_KEYS) {
+    const value = raw[key];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim().slice(0, 200);
+    const options = FILTER_OPTIONS[key];
+    const normalized =
+      key === "severity" || key === "priority" ? trimmed.toUpperCase() : trimmed.toLowerCase();
+    if (!normalized || (options && !options.includes(normalized))) continue;
+    filters[key] = normalized;
+  }
+  return filters;
+}
+
+export function appendFilters(params: URLSearchParams, filters: Filters): URLSearchParams {
+  for (const key of FILTER_KEYS) {
+    const value = filters[key];
+    if (value) params.set(key, value);
+  }
+  return params;
+}
+
+const RELATIVE_UNITS:[Intl.RelativeTimeFormatUnit, number][] = [
   ["year", 31_536_000],
   ["month", 2_592_000],
   ["week", 604_800],

@@ -1,6 +1,7 @@
 import { ArrowRight, ArrowUpRight, Network, Search } from "lucide-react";
 import Link from "next/link";
 
+import { FilterBar } from "@/components/filter-bar";
 import { RiskBadge } from "@/components/risk-badge";
 import { ScanWarning } from "@/components/scan-warning";
 import { StateCard } from "@/components/state-card";
@@ -17,10 +18,14 @@ import {
 } from "@/components/ui/table";
 import { apiHeaders } from "@/lib/api";
 import {
+  appendFilters,
   type FailingScan,
+  FILTER_KEYS,
+  type Filters,
   findingHref,
   type FindingsPage,
   graphHref,
+  parseFilters,
   relativeTime,
 } from "@/lib/findings";
 import { SEVERITIES, severityBg } from "@/lib/graph";
@@ -38,10 +43,11 @@ const FILTERS = [
   { value: "all", label: "All" },
 ];
 
-function pageHref(status: string, q: string, page: number): string {
+function pageHref(status: string, q: string, filters: Filters, page: number): string {
   const params = new URLSearchParams();
   if (status !== "active") params.set("status", status);
   if (q) params.set("q", q);
+  appendFilters(params, filters);
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
   return query ? `/?${query}` : "/";
@@ -50,6 +56,7 @@ function pageHref(status: string, q: string, page: number): string {
 async function getFindings(
   status: string,
   q: string,
+  filters: Filters,
   page: number,
 ): Promise<FindingsPage> {
   const params = new URLSearchParams({
@@ -58,6 +65,7 @@ async function getFindings(
   });
   if (status !== "active") params.set("status", status);
   if (q) params.set("q", q);
+  appendFilters(params, filters);
   const res = await fetch(`${API_URL}/findings?${params}`, {
     cache: "no-store",
     headers: await apiHeaders(),
@@ -81,17 +89,23 @@ async function getFailingScans(): Promise<FailingScan[]> {
 }
 
 export default async function Home({ searchParams }: PageProps<"/">) {
-  const { status: rawStatus, q: rawQ, page: rawPage } = await searchParams;
+  const rawParams = await searchParams;
+  const { status: rawStatus, q: rawQ, page: rawPage } = rawParams;
   const status =
     FILTERS.find((f) => f.value === rawStatus)?.value ?? FILTERS[0].value;
   const q = (typeof rawQ === "string" ? rawQ : "").trim().slice(0, 200);
+  const filters = parseFilters(rawParams);
+  const filtered = FILTER_KEYS.some((key) => filters[key]);
+  const keep: Record<string, string> = {};
+  if (status !== "active") keep.status = status;
+  if (q) keep.q = q;
   const page = Math.max(1, Number.parseInt(String(rawPage), 10) || 1);
   let result: FindingsPage | null = null;
   let error: string | null = null;
   const failingPromise = getFailingScans();
 
   try {
-    result = await getFindings(status, q, page);
+    result = await getFindings(status, q, filters, page);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
@@ -133,6 +147,9 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       {!error && (
         <form action="/" method="get" className="animate-rise flex flex-wrap gap-3">
           {status !== "active" && <input type="hidden" name="status" value={status} />}
+          {FILTER_KEYS.filter((key) => filters[key]).map((key) => (
+            <input key={key} type="hidden" name={key} value={filters[key]} />
+          ))}
           <div className="relative min-w-64 flex-1 sm:max-w-md">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2" />
             <input
@@ -153,7 +170,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
           </button>
           {q && (
             <Link
-              href={pageHref(status, "", 1)}
+              href={pageHref(status, "", filters, 1)}
               className="brutal-lift inline-flex h-10 items-center border-2 border-foreground bg-card px-4 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
             >
               Clear
@@ -163,11 +180,20 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       )}
 
       {!error && (
+        <FilterBar
+          key={JSON.stringify(filters)}
+          action="/"
+          filters={filters}
+          keep={keep}
+        />
+      )}
+
+      {!error && (
         <nav className="animate-rise flex flex-wrap gap-3">
           {FILTERS.map(({ value, label }) => (
             <Link
               key={value}
-              href={pageHref(value, q, 1)}
+              href={pageHref(value, q, filters, 1)}
               aria-current={value === status ? "page" : undefined}
               className={cn(
                 "brutal-lift border-2 border-foreground px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm",
@@ -183,10 +209,10 @@ export default async function Home({ searchParams }: PageProps<"/">) {
       {!error && findings.length === 0 && (
         <StateCard
           tone="empty"
-          title={status === "active" && !q ? "Nothing exposed" : "No matches"}
+          title={status === "active" && !q && !filtered ? "Nothing exposed" : "No matches"}
         >
-          {q
-            ? `No findings match "${q}" with this status. Try another search or filter.`
+          {q || filtered
+            ? "No findings match these filters. Try another search or reset the filters."
             : status === "active"
               ? "No open findings right now. New issues appear here as soon as a scan reports them."
               : "No findings with this status. Try another filter."}
@@ -355,7 +381,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
             <div className="flex gap-3">
               {page > 1 && (
                 <Link
-                  href={pageHref(status, q, page - 1)}
+                  href={pageHref(status, q, filters, page - 1)}
                   className="brutal-lift border-2 border-foreground bg-card px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
                 >
                   ← Prev
@@ -363,7 +389,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
               )}
               {page < pageCount && (
                 <Link
-                  href={pageHref(status, q, page + 1)}
+                  href={pageHref(status, q, filters, page + 1)}
                   className="brutal-lift border-2 border-foreground bg-acid px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm"
                 >
                   Next →
