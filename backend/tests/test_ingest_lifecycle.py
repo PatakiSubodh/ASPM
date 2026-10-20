@@ -272,6 +272,37 @@ def test_filters_narrow_findings_and_combine(client, repo):
     assert client.get("/findings", params={"internet_facing": "maybe"}).status_code == 422
 
 
+def test_graph_filters_keep_only_matching_chains(client, repo):
+    ingest(client, repo, report("jinja2", "pyyaml", "requests"))
+
+    def graph(**filters):
+        res = client.get("/graph", params=filters)
+        assert res.status_code == 200, res.text
+        return res.json()
+
+    def mine(data):
+        return {n["id"] for n in data["nodes"] if repo in n["id"].lower()}
+
+    critical = graph(severity="CRITICAL", repo=repo)
+    assert mine(critical) == {
+        f"Repository:{repo}",
+        f"Vulnerability:{finding_id(repo, 'pyyaml')}",
+        f"Asset:{repo}-api",
+    }
+    assert {(l["source"], l["target"], l["type"]) for l in critical["links"]} == {
+        (f"Repository:{repo}", f"Vulnerability:{finding_id(repo, 'pyyaml')}", "CONTAINS"),
+        (f"Vulnerability:{finding_id(repo, 'pyyaml')}", f"Asset:{repo}-api", "AFFECTS"),
+    }
+
+    p1 = graph(priority="P1", repo=repo)
+    assert mine(p1) >= {f"Vulnerability:{finding_id(repo, p)}" for p in ("pyyaml", "requests")}
+    assert f"Vulnerability:{finding_id(repo, 'jinja2')}" not in mine(p1)
+
+    assert graph(internet_facing="false", repo=repo) == {"nodes": [], "links": []}
+    assert len(mine(graph(repo=repo))) == 5
+    assert client.get("/graph", params={"severity": "bogus"}).status_code == 422
+
+
 def test_scans_are_recorded_newest_first(client, repo):
     first = ingest(client, repo, report("jinja2", "pyyaml"), commit="abc123")
     second = ingest(client, repo, report("jinja2"), commit="def456")

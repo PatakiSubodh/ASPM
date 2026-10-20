@@ -119,6 +119,60 @@ def _parse_filter(
     return items or None
 
 
+def _query_findings(
+    owner: str,
+    status: str,
+    q: Optional[str],
+    severity: Optional[str],
+    priority: Optional[str],
+    environment: Optional[str],
+    internet_facing: Optional[bool],
+    scanner: Optional[str],
+    repo: Optional[str],
+) -> list[dict]:
+    query = """
+    MATCH (repo:Repository {owner: $owner})-[:CONTAINS]->(vuln:Vulnerability)
+    WHERE $statuses IS NULL OR vuln.status IN $statuses
+    OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
+    WITH repo, vuln, asset
+    WHERE ($q IS NULL OR any(
+        value IN [vuln.id, vuln.cve, vuln.package, repo.name, asset.name]
+        WHERE value IS NOT NULL AND toLower(value) CONTAINS $q
+    ))
+      AND ($severities IS NULL OR vuln.severity IN $severities)
+      AND ($scanners IS NULL OR toLower(vuln.scanner) IN $scanners)
+      AND ($repos IS NULL OR toLower(repo.name) IN $repos)
+      AND ($environments IS NULL OR toLower(asset.environment) IN $environments)
+      AND ($internet_facing IS NULL OR coalesce(asset.internet_facing, false) = $internet_facing)
+    RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
+    """
+    needle = (q or "").strip().lower() or None
+    with get_driver().session() as session:
+        findings = [
+            {
+                "repository": record["repository"],
+                "vulnerability": record["vulnerability"],
+                "asset": record["asset"],
+                "risk": asset_risk(record["vulnerability"]["severity"], record["asset"] or {}),
+            }
+            for record in session.run(
+                query,
+                owner=owner,
+                statuses=_parse_statuses(status),
+                q=needle,
+                severities=_parse_filter(severity, "severity", SEVERITIES, upper=True),
+                scanners=_parse_filter(scanner, "scanner"),
+                repos=_parse_filter(repo, "repo"),
+                environments=_parse_filter(environment, "environment"),
+                internet_facing=internet_facing,
+            )
+        ]
+    priorities = _parse_filter(priority, "priority", ("P1", "P2", "P3", "P4"), upper=True)
+    if priorities:
+        findings = [f for f in findings if f["risk"]["priority"] in priorities]
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -388,47 +442,9 @@ def list_findings(
     offset: int = Query(0, ge=0),
 ):
     """Return a page of repository -> vulnerability -> asset chains, ranked by risk."""
-    query = """
-    MATCH (repo:Repository {owner: $owner})-[:CONTAINS]->(vuln:Vulnerability)
-    WHERE $statuses IS NULL OR vuln.status IN $statuses
-    OPTIONAL MATCH (vuln)-[:AFFECTS]->(asset:Asset)
-    WITH repo, vuln, asset
-    WHERE ($q IS NULL OR any(
-        value IN [vuln.id, vuln.cve, vuln.package, repo.name, asset.name]
-        WHERE value IS NOT NULL AND toLower(value) CONTAINS $q
-    ))
-      AND ($severities IS NULL OR vuln.severity IN $severities)
-      AND ($scanners IS NULL OR toLower(vuln.scanner) IN $scanners)
-      AND ($repos IS NULL OR toLower(repo.name) IN $repos)
-      AND ($environments IS NULL OR toLower(asset.environment) IN $environments)
-      AND ($internet_facing IS NULL OR coalesce(asset.internet_facing, false) = $internet_facing)
-    RETURN repo { .* } AS repository, vuln { .* } AS vulnerability, asset { .* } AS asset
-    """
-    needle = (q or "").strip().lower() or None
-    db = get_driver()
-    with db.session() as session:
-        findings = [
-            {
-                "repository": record["repository"],
-                "vulnerability": record["vulnerability"],
-                "asset": record["asset"],
-                "risk": asset_risk(record["vulnerability"]["severity"], record["asset"] or {}),
-            }
-            for record in session.run(
-                query,
-                owner=current_user["id"],
-                statuses=_parse_statuses(status),
-                q=needle,
-                severities=_parse_filter(severity, "severity", SEVERITIES, upper=True),
-                scanners=_parse_filter(scanner, "scanner"),
-                repos=_parse_filter(repo, "repo"),
-                environments=_parse_filter(environment, "environment"),
-                internet_facing=internet_facing,
-            )
-        ]
-    priorities = _parse_filter(priority, "priority", ("P1", "P2", "P3", "P4"), upper=True)
-    if priorities:
-        findings = [f for f in findings if f["risk"]["priority"] in priorities]
+    findings = _query_findings(
+        current_user["id"], status, q, severity, priority, environment, internet_facing, scanner, repo
+    )
     findings.sort(
         key=lambda f: (
             -f["risk"]["score"],
@@ -712,7 +728,41 @@ def delete_asset(name: str, current_user: CurrentUser):
 
 
 @app.get("/graph", dependencies=signed_in)
-def get_graph(current_user: CurrentUser, status: str = ",".join(ACTIVE_STATUSES)):
+def get_graph(
+    current_user: CurrentUser,
+    status: str = ",".join(ACTIVE_STATUSES),
+    severity: Optional[str] = Query(None, max_length=100),
+    priority: Optional[str] = Query(None, max_length=100),
+    environment: Optional[str] = Query(None, max_length=200),
+    internet_facing: Optional[bool] = None,
+    scanner: Optional[str] = Query(None, max_length=200),
+    repo: Optional[str] = Query(None, max_length=500),
+):
+    if any((severity, priority, environment, scanner, repo)) or internet_facing is not None:
+        filtered_nodes: dict[str, dict] = {}
+        filtered_links: dict[tuple, dict] = {}
+        for finding in _query_findings(
+            current_user["id"], status, None, severity, priority, environment, internet_facing, scanner, repo
+        ):
+            chain = [
+                ("Repository", finding["repository"], "name"),
+                ("Vulnerability", finding["vulnerability"], "id"),
+            ]
+            if finding["asset"]:
+                chain.append(("Asset", finding["asset"], "name"))
+            ids = []
+            for label, props, key in chain:
+                node = f"{label}:{props[key]}"
+                filtered_nodes.setdefault(node, {"id": node, "label": label, "properties": props})
+                ids.append(node)
+            for (source, target), rel in zip(zip(ids, ids[1:]), ("CONTAINS", "AFFECTS")):
+                filtered_links[(source, target, rel)] = {
+                    "source": source,
+                    "target": target,
+                    "type": rel,
+                }
+        return {"nodes": list(filtered_nodes.values()), "links": list(filtered_links.values())}
+
     query = """
     MATCH (n {owner: $owner})
     WHERE n:Repository OR n:Asset
