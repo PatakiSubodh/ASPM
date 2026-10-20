@@ -244,7 +244,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `GET` | `/findings/{id}` | One vulnerability with its repositories, assets and per-asset risk |
 | `PATCH` | `/findings/{id}` | Set status: `open`, `in_progress`, `resolved`, `accepted_risk`, `false_positive` |
 | `GET` | `/assets` | Assets with open / in-progress vulnerability counts per severity and worst risk |
-| `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings` |
+| `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings`; the same `?severity=`, `?priority=`, `?environment=`, `?internet_facing=`, `?scanner=`, `?repo=` filters, which keep only matching vulnerabilities and the repositories and assets they connect to |
 | `GET` | `/scans` | Scan runs, newest first, with `status` (`succeeded` / `failed`); `?repo=`, `?limit=` |
 | `GET` | `/scans/failing` | Repositories whose latest scan (per scanner) failed, with reason and last successful scan time |
 | `POST` | `/scans/failed` | Record a failed scan run (`repo_name`, `scanner`, `error`, optional `repo_url`, `commit`, `detail`); never resolves anything |
