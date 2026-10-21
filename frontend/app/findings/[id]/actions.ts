@@ -2,7 +2,7 @@
 
 import { refresh } from "next/cache";
 
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import { type FindingStatus, STATUSES } from "@/lib/findings";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -19,6 +19,7 @@ export async function updateStatus(id: string, formData: FormData) {
     headers,
     body: JSON.stringify({ status }),
   });
+  redirectIfUnauthorized(res.status);
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }

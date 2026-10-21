@@ -1,7 +1,9 @@
+import { unstable_rethrow } from "next/navigation";
+
 import { FilterBar } from "@/components/filter-bar";
 import FindingsGraph from "@/components/graph-view";
 import { StateCard } from "@/components/state-card";
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import { appendFilters, FILTER_KEYS, type Filters, parseFilters } from "@/lib/findings";
 import type { GraphData } from "@/lib/graph";
 
@@ -16,6 +18,7 @@ async function getGraph(focus: string | null, filters: Filters): Promise<GraphDa
     cache: "no-store",
     headers: await apiHeaders(),
   });
+  redirectIfUnauthorized(res.status);
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }
@@ -34,6 +37,7 @@ export default async function GraphPage({ searchParams }: PageProps<"/graph">) {
   try {
     graph = await getGraph(focus, filters);
   } catch (e) {
+    unstable_rethrow(e);
     error = e instanceof Error ? e.message : "Unknown error";
   }
 

@@ -1,5 +1,6 @@
 import { ArrowRight, ArrowUpRight, Network, Search } from "lucide-react";
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 
 import { FilterBar } from "@/components/filter-bar";
 import { RiskBadge } from "@/components/risk-badge";
@@ -16,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import {
   appendFilters,
   type FailingScan,
@@ -70,6 +71,7 @@ async function getFindings(
     cache: "no-store",
     headers: await apiHeaders(),
   });
+  redirectIfUnauthorized(res.status);
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }
@@ -107,6 +109,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
   try {
     result = await getFindings(status, q, filters, page);
   } catch (e) {
+    unstable_rethrow(e);
     error = e instanceof Error ? e.message : "Unknown error";
   }
   const failing = await failingPromise;

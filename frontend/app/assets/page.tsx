@@ -1,3 +1,5 @@
+import { unstable_rethrow } from "next/navigation";
+
 import { RiskBadge } from "@/components/risk-badge";
 import { StateCard } from "@/components/state-card";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import { relativeTime, type AssetSummary } from "@/lib/findings";
 import { SEVERITIES, severityBg } from "@/lib/graph";
 import { cn } from "@/lib/utils";
@@ -22,6 +24,7 @@ async function getAssets(): Promise<AssetSummary[]> {
     cache: "no-store",
     headers: await apiHeaders(),
   });
+  redirectIfUnauthorized(res.status);
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }
@@ -35,6 +38,7 @@ export default async function AssetsPage() {
   try {
     assets = await getAssets();
   } catch (e) {
+    unstable_rethrow(e);
     error = e instanceof Error ? e.message : "Unknown error";
   }
 

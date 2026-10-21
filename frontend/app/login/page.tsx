@@ -16,6 +16,7 @@ const ERRORS: Record<string, string> = {
   credentials: "Wrong email or password, or the email is not confirmed yet.",
   oauth: "Google / GitHub sign-in failed. Try again.",
   confirm: "The email link is invalid or has expired. Request a new one.",
+  expired: "Your session has expired. Sign in again.",
 };
 
 const MESSAGES: Record<string, string> = {

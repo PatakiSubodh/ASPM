@@ -1,10 +1,11 @@
 import { ArrowUpRight, Check } from "lucide-react";
+import { unstable_rethrow } from "next/navigation";
 
 import { AddAssetButton, AddRepositoryButton } from "@/components/repositories/add-buttons";
 import { ScanToggle } from "@/components/repositories/scan-toggle";
 import { AssetActions, RepositoryActions } from "@/components/repositories/row-menus";
 import { StateCard } from "@/components/state-card";
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import {
   type Asset,
   type AssetSummary,
@@ -30,6 +31,7 @@ async function getJson<T>(path: string): Promise<T> {
     cache: "no-store",
     headers: await apiHeaders(),
   });
+  redirectIfUnauthorized(res.status);
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
   }
@@ -47,6 +49,7 @@ export default async function RepositoriesPage() {
       getJson<AssetSummary[]>("/assets"),
     ]);
   } catch (e) {
+    unstable_rethrow(e);
     error = e instanceof Error ? e.message : "Unknown error";
   }
 

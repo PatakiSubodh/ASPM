@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import type { ActionResult } from "@/lib/repositories";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -15,6 +15,7 @@ async function send(method: string, path: string, body?: unknown): Promise<numbe
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  redirectIfUnauthorized(res.status);
   return res.status;
 }
 

@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowRight, ArrowUpRight, Network } from "lucide-react";
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { RiskBadge } from "@/components/risk-badge";
@@ -8,7 +9,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { apiHeaders } from "@/lib/api";
+import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import {
   type Asset,
   type FindingDetail,
@@ -33,6 +34,7 @@ async function getFinding(id: string): Promise<FindingDetail | null> {
     cache: "no-store",
     headers: await apiHeaders(),
   });
+  redirectIfUnauthorized(res.status);
   if (res.status === 404) return null;
   if (!res.ok) {
     throw new Error(`Backend responded with ${res.status}`);
@@ -54,6 +56,7 @@ export default async function FindingPage({
   try {
     finding = await getFinding(id);
   } catch (e) {
+    unstable_rethrow(e);
     error = e instanceof Error ? e.message : "Unknown error";
   }
 
