@@ -9,7 +9,18 @@ import { relativeTime } from "@/lib/findings";
 import { INSTALL_ERRORS, type InstallationSummary, manageInstallationUrl } from "@/lib/github";
 import { cn } from "@/lib/utils";
 
-import { connectGitHub, disconnectGitHub, refreshGitHubRepositories } from "./actions";
+import {
+  connectGitHub,
+  disconnectGitHub,
+  reconnectGitHub,
+  refreshGitHubRepositories,
+} from "./actions";
+
+const STATUS_LABELS = {
+  active: "● Active",
+  suspended: "Suspended",
+  disconnected: "Disconnected",
+} as const;
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -43,6 +54,7 @@ export default async function GitHubSettingsPage({
 
   const notice = code ? (INSTALL_ERRORS[code] ?? INSTALL_ERRORS.github) : null;
   const connected = installations.length > 0;
+  const hasActive = installations.some((i) => i.installation.status === "active");
 
   return (
     <div className="space-y-12">
@@ -85,7 +97,7 @@ export default async function GitHubSettingsPage({
               </p>
             </div>
             <div className="flex flex-wrap items-start gap-4">
-              {connected && (
+              {hasActive && (
                 <GitHubActionButton
                   action={refreshGitHubRepositories}
                   pendingLabel="Refreshing…"
@@ -146,13 +158,24 @@ export default async function GitHubSettingsPage({
                         installation.status === "active" ? "bg-acid" : "bg-low",
                       )}
                     >
-                      {installation.status === "active" ? "● Active" : "Suspended"}
+                      {STATUS_LABELS[installation.status]}
                     </span>
-                    <DisconnectButton
-                      account={installation.account_login ?? `installation ${installation.id}`}
-                      manageUrl={manageInstallationUrl(installation)}
-                      action={disconnectGitHub.bind(null, installation.id)}
-                    />
+                    {installation.status === "disconnected" ? (
+                      <GitHubActionButton
+                        action={reconnectGitHub.bind(null, installation.id)}
+                        pendingLabel="Reconnecting…"
+                        prominent
+                      >
+                        <Plug className="size-4" />
+                        Reconnect
+                      </GitHubActionButton>
+                    ) : (
+                      <DisconnectButton
+                        account={installation.account_login ?? `installation ${installation.id}`}
+                        manageUrl={manageInstallationUrl(installation)}
+                        action={disconnectGitHub.bind(null, installation.id)}
+                      />
+                    )}
                   </div>
                 </li>
               ))}

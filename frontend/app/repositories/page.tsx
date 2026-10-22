@@ -150,8 +150,8 @@ export default async function RepositoriesPage() {
       {!error && revokedCount > 0 && (
         <section className="animate-rise brutal bg-crit p-5 text-sm leading-snug">
           {revokedCount} {revokedCount === 1 ? "repository" : "repositories"} can no longer be
-          reached because access was removed on GitHub. Their findings stay visible, but they are
-          not scanned again. Grant access again on GitHub, then refresh in{" "}
+          reached, because GitHub was disconnected or access was removed on GitHub. Their findings
+          stay visible, but they are not scanned. Reconnect or refresh in{" "}
           <Link href="/settings/github" className="font-bold underline decoration-2 underline-offset-4">
             GitHub settings
           </Link>

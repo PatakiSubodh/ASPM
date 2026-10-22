@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
           headers,
           body: JSON.stringify({ installation_id: installationId, state, nonce }),
         })
-      : await fetch(`${API_URL}/github/repositories/refresh`, {
+      : await fetch(`${API_URL}/github/installations/${installationId}/reconnect`, {
           method: "POST",
           cache: "no-store",
           headers,
