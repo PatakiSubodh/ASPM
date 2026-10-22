@@ -16,6 +16,8 @@ SECRET = "pytest-install-state-secret-0123456789"
 def configured(monkeypatch):
     monkeypatch.setenv("INSTALL_STATE_SECRET", SECRET)
     monkeypatch.setenv("GITHUB_APP_SLUG", "aspm-test")
+    monkeypatch.setattr(github, "installation_token", lambda installation_id: {"token": "t"})
+    monkeypatch.setattr(github, "list_installation_repositories", lambda token: [])
 
 
 @pytest.fixture

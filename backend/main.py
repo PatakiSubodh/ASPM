@@ -787,7 +787,104 @@ def link_github_installation(body: InstallationIn, current_user: CurrentUser):
         raise HTTPException(status_code=409, detail="Installation is linked to another account")
     if record is None:
         raise HTTPException(status_code=409, detail="Installation is linked to another account")
-    return {"installation": record["installation"]}
+    synced = _sync_installation(
+        current_user["id"], body.installation_id, details.get("repository_selection")
+    )
+    return {"installation": record["installation"], "sync": synced}
+
+
+SYNC_RENAME_QUERY = """
+UNWIND $repos AS r
+MATCH (repo:Repository {owner: $owner, github_repo_id: r.id})
+WHERE repo.name <> r.name
+SET repo.name = r.name
+"""
+
+SYNC_UPSERT_QUERY = """
+MATCH (i:GitHubInstallation {id: $id, owner: $owner})
+UNWIND $repos AS r
+MERGE (repo:Repository {owner: $owner, name: r.name})
+  ON CREATE SET repo.selected = $selected, repo.created_at = $now
+SET repo.github_repo_id = r.id,
+    repo.full_name = r.full_name,
+    repo.url = r.url,
+    repo.private = r.private,
+    repo.language = coalesce(r.language, repo.language),
+    repo.branch = coalesce(repo.branch, r.branch),
+    repo.source = coalesce(repo.source, 'github'),
+    repo.access_revoked = false,
+    repo.last_synced_at = $now
+MERGE (i)-[:GRANTS]->(repo)
+"""
+
+SYNC_REVOKE_QUERY = """
+MATCH (:GitHubInstallation {id: $id, owner: $owner})-[:GRANTS]->(repo:Repository {owner: $owner})
+WHERE NOT repo.github_repo_id IN $ids
+SET repo.access_revoked = true, repo.selected = false
+RETURN count(repo) AS revoked
+"""
+
+
+def _sync_installation(owner: str, installation_id: int, selection: Optional[str]) -> dict:
+    try:
+        token = github.installation_token(installation_id)["token"]
+        granted = github.list_installation_repositories(token)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="GitHub App is not configured")
+    except github.GitHubError as error:
+        raise HTTPException(status_code=502, detail=error.message)
+    repos = [
+        {
+            "id": item["id"],
+            "name": _normalize_key(item["full_name"]).lower(),
+            "full_name": item["full_name"],
+            "url": item.get("html_url"),
+            "private": bool(item.get("private")),
+            "language": item.get("language"),
+            "branch": item.get("default_branch"),
+        }
+        for item in granted
+    ]
+
+    def work(tx) -> int:
+        tx.run(SYNC_RENAME_QUERY, owner=owner, repos=repos).consume()
+        tx.run(
+            SYNC_UPSERT_QUERY,
+            owner=owner,
+            id=installation_id,
+            repos=repos,
+            selected=selection == "selected",
+            now=_now(),
+        ).consume()
+        return tx.run(
+            SYNC_REVOKE_QUERY,
+            owner=owner,
+            id=installation_id,
+            ids=[repo["id"] for repo in repos],
+        ).single()["revoked"]
+
+    with get_driver().session() as session:
+        revoked = session.execute_write(work)
+    return {"repositories": len(repos), "revoked": revoked}
+
+
+@app.post("/github/repositories/refresh")
+def refresh_github_repositories(current_user: CurrentUser):
+    query = """
+    MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {owner: $owner})
+    WHERE i.status = 'active'
+    RETURN i.id AS id, i.repository_selection AS selection
+    """
+    with get_driver().session() as session:
+        installations = list(session.run(query, owner=current_user["id"]))
+    totals = {"installations": len(installations), "repositories": 0, "revoked": 0}
+    for installation in installations:
+        result = _sync_installation(
+            current_user["id"], installation["id"], installation["selection"]
+        )
+        totals["repositories"] += result["repositories"]
+        totals["revoked"] += result["revoked"]
+    return totals
 
 
 @app.get("/graph", dependencies=signed_in)

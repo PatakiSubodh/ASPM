@@ -15,6 +15,8 @@ JWT_BACKDATE_SECONDS = 60
 JWT_LIFETIME_SECONDS = 540
 STATE_LIFETIME_SECONDS = 600
 STATE_ALGORITHM = "HS256"
+REPOSITORIES_PER_PAGE = 100
+MAX_REPOSITORIES = 500
 
 
 class GitHubError(Exception):
@@ -136,3 +138,20 @@ def install_url(state: str) -> str:
 
 def get_installation(installation_id: int) -> dict:
     return github_request("GET", f"/app/installations/{int(installation_id)}", app_jwt())
+
+
+def list_installation_repositories(token: str) -> list[dict]:
+    repositories: list[dict] = []
+    page = 1
+    while len(repositories) < MAX_REPOSITORIES:
+        payload = github_request(
+            "GET",
+            f"/installation/repositories?per_page={REPOSITORIES_PER_PAGE}&page={page}",
+            token,
+        )
+        batch = payload.get("repositories", [])
+        repositories.extend(batch)
+        if len(batch) < REPOSITORIES_PER_PAGE:
+            break
+        page += 1
+    return repositories[:MAX_REPOSITORIES]
