@@ -908,6 +908,29 @@ def list_github_installations(current_user: CurrentUser):
         ]
 
 
+DISCONNECT_INSTALLATION = """
+MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {id: $id, owner: $owner})
+OPTIONAL MATCH (i)-[:GRANTS]->(repo:Repository {owner: $owner})
+SET repo.access_revoked = true, repo.selected = false
+WITH i, count(repo) AS revoked
+DETACH DELETE i
+RETURN revoked
+"""
+
+
+@app.delete("/github/installations/{installation_id}")
+def disconnect_github_installation(installation_id: int, current_user: CurrentUser):
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(
+                DISCONNECT_INSTALLATION, owner=current_user["id"], id=installation_id
+            ).single()
+        )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Installation not found")
+    return {"disconnected": installation_id, "revoked": record["revoked"]}
+
+
 @app.get("/graph", dependencies=signed_in)
 def get_graph(
     current_user: CurrentUser,

@@ -258,6 +258,67 @@ def test_list_installations_requires_login(client):
     assert response.status_code == 401
 
 
+def test_disconnect_removes_link_and_revokes_repositories(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+    granted(monkeypatch, [item(1, "api"), item(2, "web")])
+    client.post("/github/repositories/refresh")
+    with main.get_driver().session() as session:
+        session.run(
+            "MATCH (r:Repository {owner: $owner, name: $name}) "
+            "CREATE (r)-[:CONTAINS]->(:Vulnerability {owner: $owner, id: $vid, severity: 'HIGH', "
+            "description: 'd', status: 'open'})",
+            owner=TEST_USER_ID,
+            name=f"{PREFIX}/api",
+            vid=f"PYTEST-SYNC-{created['id']}",
+        ).consume()
+
+    response = client.delete(f"/github/installations/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == {"disconnected": created["id"], "revoked": 2}
+    assert all(r["installation"]["id"] != created["id"] for r in client.get("/github/installations").json())
+    for suffix in ("api", "web"):
+        repo = stored(suffix)
+        assert repo["access_revoked"] is True
+        assert repo["selected"] is False
+    with main.get_driver().session() as session:
+        kept = session.run(
+            "MATCH (:Repository {owner: $owner, name: $name})-[:CONTAINS]->(v:Vulnerability {id: $vid}) "
+            "RETURN count(v) AS n",
+            owner=TEST_USER_ID,
+            name=f"{PREFIX}/api",
+            vid=f"PYTEST-SYNC-{created['id']}",
+        ).single()["n"]
+        session.run("MATCH (v:Vulnerability {id: $vid}) DETACH DELETE v", vid=f"PYTEST-SYNC-{created['id']}").consume()
+    assert kept == 1
+
+
+def test_disconnect_unknown_installation_is_404(client):
+    assert client.delete("/github/installations/999999999999").status_code == 404
+
+
+def test_disconnect_other_users_installation_is_404(client, installation):
+    create, created = installation
+    with main.get_driver().session() as session:
+        session.run(
+            "CREATE (:GitHubInstallation {id: $id, owner: 'someone-else'})", id=created["id"]
+        ).consume()
+
+    assert client.delete(f"/github/installations/{created['id']}").status_code == 404
+    with main.get_driver().session() as session:
+        count = session.run(
+            "MATCH (i:GitHubInstallation {id: $id}) RETURN count(i) AS n", id=created["id"]
+        ).single()["n"]
+    assert count == 1
+
+
+def test_disconnect_requires_login(client):
+    response = client.delete("/github/installations/1", headers={"Authorization": ""})
+
+    assert response.status_code == 401
+
+
 def test_refresh_requires_login(client):
     response = client.post("/github/repositories/refresh", headers={"Authorization": ""})
 
