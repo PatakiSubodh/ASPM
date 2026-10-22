@@ -1,3 +1,4 @@
+from urllib.parse import quote
 from uuid import uuid4
 
 import pytest
@@ -101,13 +102,26 @@ def test_refresh_keeps_user_choices(client, monkeypatch, installation):
     create("all")
     granted(monkeypatch, [item(1, "api")])
     client.post("/github/repositories/refresh")
-    client.patch(f"/repositories/{PREFIX}/api".replace("/", "%2F"), json={"selected": True, "branch": "dev"})
+    client.patch(f"/repositories/{quote(PREFIX + '/api', safe='')}", json={"selected": True, "branch": "dev"})
 
     client.post("/github/repositories/refresh")
 
     repo = stored("api")
     assert repo["selected"] is True
     assert repo["branch"] == "dev"
+
+
+def test_slash_names_work_on_repository_routes(client, monkeypatch, installation):
+    create, _ = installation
+    create("selected")
+    granted(monkeypatch, [item(1, "api")])
+    client.post("/github/repositories/refresh")
+    encoded = quote(f"{PREFIX}/api", safe="")
+
+    assets = client.put(f"/repositories/{encoded}/assets", json={"assets": []})
+
+    assert assets.status_code == 200
+    assert assets.json()["repository"] == f"{PREFIX}/api"
 
 
 def test_rename_updates_existing_repository(client, monkeypatch, installation):
@@ -207,6 +221,41 @@ def test_refresh_github_failure_is_502(client, monkeypatch, installation):
     monkeypatch.setattr(github, "list_installation_repositories", broken)
 
     assert client.post("/github/repositories/refresh").status_code == 502
+
+
+def test_list_installations_counts_granted_and_revoked(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+    granted(monkeypatch, [item(1, "keep"), item(2, "drop")])
+    client.post("/github/repositories/refresh")
+    granted(monkeypatch, [item(1, "keep")])
+    client.post("/github/repositories/refresh")
+
+    response = client.get("/github/installations")
+
+    assert response.status_code == 200
+    row = next(r for r in response.json() if r["installation"]["id"] == created["id"])
+    assert row["repositories"] == 2
+    assert row["revoked"] == 1
+    assert row["installation"]["repository_selection"] == "selected"
+
+
+def test_list_installations_hides_other_users(client, installation):
+    create, created = installation
+    with main.get_driver().session() as session:
+        session.run(
+            "CREATE (:GitHubInstallation {id: $id, owner: 'someone-else'})", id=created["id"]
+        ).consume()
+
+    response = client.get("/github/installations")
+
+    assert all(r["installation"]["id"] != created["id"] for r in response.json())
+
+
+def test_list_installations_requires_login(client):
+    response = client.get("/github/installations", headers={"Authorization": ""})
+
+    assert response.status_code == 401
 
 
 def test_refresh_requires_login(client):

@@ -576,7 +576,7 @@ def create_repository(repository: RepositoryCreate, current_user: CurrentUser):
     return {"repository": record["repository"]}
 
 
-@app.patch("/repositories/{name}")
+@app.patch("/repositories/{name:path}")
 def update_repository(name: str, update: RepositoryUpdate, current_user: CurrentUser):
     query = f"""
     MATCH (repo:Repository {{owner: $owner, name: $name}})
@@ -661,7 +661,7 @@ def apply_repository_assets(tx, owner: str, name: str, assets: list[str]) -> Opt
     }
 
 
-@app.put("/repositories/{name}/assets")
+@app.put("/repositories/{name:path}/assets")
 def set_repository_assets(name: str, body: RepositoryAssetsIn, current_user: CurrentUser):
     with get_driver().session() as session:
         result = session.execute_write(
@@ -885,6 +885,27 @@ def refresh_github_repositories(current_user: CurrentUser):
         totals["repositories"] += result["repositories"]
         totals["revoked"] += result["revoked"]
     return totals
+
+
+@app.get("/github/installations")
+def list_github_installations(current_user: CurrentUser):
+    query = """
+    MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {owner: $owner})
+    OPTIONAL MATCH (i)-[:GRANTS]->(repo:Repository {owner: $owner})
+    RETURN i { .* } AS installation,
+           count(repo) AS repositories,
+           sum(CASE WHEN repo.access_revoked = true THEN 1 ELSE 0 END) AS revoked
+    ORDER BY installation.account_login
+    """
+    with get_driver().session() as session:
+        return [
+            {
+                "installation": record["installation"],
+                "repositories": record["repositories"],
+                "revoked": record["revoked"],
+            }
+            for record in session.run(query, owner=current_user["id"])
+        ]
 
 
 @app.get("/graph", dependencies=signed_in)
