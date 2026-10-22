@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronDown, LogOut } from "lucide-react";
+import { ChevronDown, LogOut, Plug } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { signOut } from "@/app/auth/actions";
 import {
@@ -20,6 +21,7 @@ function initials({ email, name }: Profile) {
 }
 
 export function ProfileMenu({ profile }: { profile: Profile }) {
+  const router = useRouter();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -46,6 +48,13 @@ export function ProfileMenu({ profile }: { profile: Profile }) {
           <p className="truncate font-mono text-xs text-background/70">{profile.email}</p>
         </div>
         <DropdownMenuSeparator className="mx-0 my-0 h-0.5 bg-foreground" />
+        <DropdownMenuItem
+          onClick={() => router.push("/settings/github")}
+          className="m-1 gap-2 rounded-none px-3 py-2.5 font-mono text-[11px] font-bold uppercase tracking-widest focus:bg-acid"
+        >
+          <Plug className="size-4" />
+          GitHub
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => signOut()}
           className="m-1 gap-2 rounded-none px-3 py-2.5 font-mono text-[11px] font-bold uppercase tracking-widest focus:bg-acid"

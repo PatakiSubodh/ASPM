@@ -61,6 +61,9 @@ export interface Repository {
   selected?: boolean;
   source?: string;
   last_scanned_at?: string;
+  full_name?: string;
+  private?: boolean;
+  access_revoked?: boolean;
 }
 
 export interface Vulnerability {

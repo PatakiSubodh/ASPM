@@ -1,9 +1,11 @@
 import { ArrowUpRight, Check } from "lucide-react";
+import Link from "next/link";
 import { unstable_rethrow } from "next/navigation";
 
 import { AddAssetButton, AddRepositoryButton } from "@/components/repositories/add-buttons";
 import { ScanToggle } from "@/components/repositories/scan-toggle";
 import { AssetActions, RepositoryActions } from "@/components/repositories/row-menus";
+import { BUTTON_PRIMARY } from "@/components/repositories/styles";
 import { StateCard } from "@/components/state-card";
 import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import {
@@ -12,6 +14,7 @@ import {
   type CatalogEntry,
   relativeTime,
 } from "@/lib/findings";
+import type { InstallationSummary } from "@/lib/github";
 import { cn } from "@/lib/utils";
 
 import {
@@ -41,12 +44,14 @@ async function getJson<T>(path: string): Promise<T> {
 export default async function RepositoriesPage() {
   let entries: CatalogEntry[] = [];
   let assets: AssetSummary[] = [];
+  let installations: InstallationSummary[] = [];
   let error: string | null = null;
 
   try {
-    [entries, assets] = await Promise.all([
+    [entries, assets, installations] = await Promise.all([
       getJson<CatalogEntry[]>("/repositories"),
       getJson<AssetSummary[]>("/assets"),
+      getJson<InstallationSummary[]>("/github/installations"),
     ]);
   } catch (e) {
     unstable_rethrow(e);
@@ -79,6 +84,15 @@ export default async function RepositoriesPage() {
     },
   ];
   const current = steps.findIndex((s) => !s.done);
+  const revokedCount = entries.filter((e) => e.repository.access_revoked).length;
+  const needsPicking =
+    installations.some((i) => i.installation.repository_selection === "all") &&
+    entries.some(
+      (e) =>
+        e.repository.source === "github" &&
+        e.repository.selected === false &&
+        !e.repository.access_revoked,
+    );
 
   return (
     <div className="space-y-12">
@@ -103,6 +117,46 @@ export default async function RepositoriesPage() {
         <StateCard tone="error" title="Couldn&apos;t load your repositories">
           The service isn&apos;t responding right now. Refresh the page to try again.
         </StateCard>
+      )}
+
+      {!error && installations.length === 0 && (
+        <section
+          className="animate-rise brutal flex flex-wrap items-center justify-between gap-5 bg-acid p-6"
+          style={{ animationDelay: "30ms" }}
+        >
+          <div className="max-w-xl space-y-2">
+            <h2 className="text-2xl font-bold tracking-tight">Connect your GitHub</h2>
+            <p className="text-sm leading-snug">
+              Install the ASPM GitHub App, choose the repositories you want checked, and they
+              appear here without typing any addresses.
+            </p>
+          </div>
+          <Link
+            href="/settings/github"
+            className={cn(BUTTON_PRIMARY, "inline-flex items-center justify-center bg-card hover:bg-card")}
+          >
+            Connect GitHub
+          </Link>
+        </section>
+      )}
+
+      {!error && needsPicking && (
+        <section className="animate-rise brutal bg-acid p-5 text-sm leading-snug">
+          You gave ASPM access to all your repositories, so none are scanned yet. Switch on{" "}
+          <strong>Auto-scan</strong> for the ones you want checked.
+        </section>
+      )}
+
+      {!error && revokedCount > 0 && (
+        <section className="animate-rise brutal bg-crit p-5 text-sm leading-snug">
+          {revokedCount} {revokedCount === 1 ? "repository" : "repositories"} can no longer be
+          reached because access was removed on GitHub. Their findings stay visible, but they are
+          not scanned again. Grant access again on GitHub, then refresh in{" "}
+          <Link href="/settings/github" className="font-bold underline decoration-2 underline-offset-4">
+            GitHub settings
+          </Link>
+          .
+        </section>
       )}
 
       {!error && current !== -1 && (
@@ -194,6 +248,11 @@ export default async function RepositoriesPage() {
                         {[repository.language, repository.branch ?? "default branch"]
                           .filter(Boolean)
                           .join(" · ")}
+                        {repository.access_revoked && (
+                          <span className="ml-2 inline-block -rotate-2 border-2 border-foreground bg-crit px-2 py-0.5 font-bold tracking-widest text-foreground shadow-brutal-sm">
+                            Access revoked
+                          </span>
+                        )}
                       </p>
                     </div>
 
