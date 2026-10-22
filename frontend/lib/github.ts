@@ -15,6 +15,13 @@ export interface InstallationSummary {
   revoked: number;
 }
 
+export function manageInstallationUrl(installation: GitHubInstallation): string {
+  if (installation.account_type === "Organization" && installation.account_login) {
+    return `https://github.com/organizations/${encodeURIComponent(installation.account_login)}/settings/installations/${installation.id}`;
+  }
+  return `https://github.com/settings/installations/${installation.id}`;
+}
+
 export const INSTALL_ERRORS: Record<string, string> = {
   invalid: "GitHub sent back an incomplete request. Start the connection again.",
   state: "The connection link expired or doesn't belong to this session. Start again.",

@@ -2,13 +2,14 @@ import { Plug, RefreshCw } from "lucide-react";
 import { unstable_rethrow } from "next/navigation";
 
 import { GitHubActionButton } from "@/components/github/action-button";
+import { DisconnectButton } from "@/components/github/disconnect-button";
 import { StateCard } from "@/components/state-card";
 import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
 import { relativeTime } from "@/lib/findings";
-import { INSTALL_ERRORS, type InstallationSummary } from "@/lib/github";
+import { INSTALL_ERRORS, type InstallationSummary, manageInstallationUrl } from "@/lib/github";
 import { cn } from "@/lib/utils";
 
-import { connectGitHub, refreshGitHubRepositories } from "./actions";
+import { connectGitHub, disconnectGitHub, refreshGitHubRepositories } from "./actions";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -138,14 +139,21 @@ export default async function GitHubSettingsPage({
                       {revoked > 0 && ` · ${revoked} no longer accessible`}
                     </p>
                   </div>
-                  <span
-                    className={cn(
-                      "inline-flex w-fit -rotate-2 border-2 border-foreground px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm",
-                      installation.status === "active" ? "bg-acid" : "bg-low",
-                    )}
-                  >
-                    {installation.status === "active" ? "● Active" : "Suspended"}
-                  </span>
+                  <div className="flex items-center gap-4">
+                    <span
+                      className={cn(
+                        "inline-flex w-fit -rotate-2 border-2 border-foreground px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm",
+                        installation.status === "active" ? "bg-acid" : "bg-low",
+                      )}
+                    >
+                      {installation.status === "active" ? "● Active" : "Suspended"}
+                    </span>
+                    <DisconnectButton
+                      account={installation.account_login ?? `installation ${installation.id}`}
+                      manageUrl={manageInstallationUrl(installation)}
+                      action={disconnectGitHub.bind(null, installation.id)}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>

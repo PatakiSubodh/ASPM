@@ -254,7 +254,12 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `GET` | `/catalog` | Every repository with its deployed assets, open count and last scan time |
 | `GET` | `/repositories` | The caller's repositories with `selected`, deployed assets, open count and last scan time |
 | `POST` | `/repositories` | Add a repository `{name, url, language?, branch?}` (`source: manual`, `selected: true`); 409 if the name exists |
-| `PATCH` | `/repositories/{name}` | Set `selected` and/or `branch` |
+| `PATCH` | `/repositories/{name}` | Set `selected` and/or `branch`; `name` may contain `/` (GitHub repositories are named `owner/repo`) |
+| `POST` | `/github/install-url` | Signed, 10-minute `state` and the GitHub App install URL; returns `{url, nonce}` (the web keeps `nonce` in a cookie); 503 if the app is not configured |
+| `POST` | `/github/installations` | Bind a GitHub installation to the caller `{installation_id, state, nonce}`, then sync its repositories; 400 bad or expired state, 404 unknown installation, 409 linked to another account; returns `{installation, sync}` |
+| `GET` | `/github/installations` | The caller's installations with `repositories` (granted) and `revoked` counts |
+| `DELETE` | `/github/installations/{id}` | Disconnect: removes the link inside ASPM, marks its repositories `access_revoked` and unselected, keeps findings; 404 if not the caller's; returns `{disconnected, revoked}` |
+| `POST` | `/github/repositories/refresh` | Re-sync the repositories of every active installation of the caller (up to 500 each); new ones start `selected` only when the app was installed on "Only select repositories"; repositories no longer granted become `access_revoked`; returns `{installations, repositories, revoked}` |
 | `PUT` | `/repositories/{name}/assets` | Replace the assets the repository deploys to (`{assets: [names]}`, empty = unmapped); unknown asset names → 422; existing findings are re-linked; returns `{repository, assets, linked, unlinked, backfilled}` |
 | `POST` | `/assets` | Create an asset `{name, environment, type, internet_facing?, image?}` (`source: manual`); 409 if the name exists |
 | `PATCH` | `/assets/{name}` | Change `environment`, `type`, `internet_facing` or `image` |
@@ -273,7 +278,8 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `/findings/[id]` | Finding detail: description, risk, NVD link, status change, repo → vuln → asset path |
 | `/assets` | Asset inventory ranked by risk |
 | `/scans` | Scan history with result (done / failed with reason) and ingested / resolved / reopened counts |
-| `/repositories` | Repositories page with a three-step guide for new users: add a repository (dialog), add assets (dialog with environment and type selects), link them (side sheet); per-row menus for branch, edit and delete |
+| `/repositories` | Repositories page with a three-step guide for new users: add a repository (dialog), add assets (dialog with environment and type selects), link them (side sheet); per-row menus for branch, edit and delete; a Connect GitHub card when nothing is connected, an "Access revoked" tag and banner, and a prompt to switch on Auto-scan after an "All repositories" install |
+| `/settings/github` | GitHub connections (profile menu → GitHub): Connect GitHub, Add another account, Refresh repositories and Disconnect per account; `/github/installed` is the Setup URL GitHub redirects to after install |
 
 ## Project layout
 

@@ -39,6 +39,28 @@ export async function connectGitHub(): Promise<ActionResult> {
   redirect(url);
 }
 
+export async function disconnectGitHub(installationId: number): Promise<ActionResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/github/installations/${installationId}`, {
+      method: "DELETE",
+      cache: "no-store",
+      headers: await apiHeaders(),
+    });
+  } catch {
+    return { error: "The service isn't responding right now. Try again." };
+  }
+  redirectIfUnauthorized(res.status);
+  if (res.status === 404) {
+    revalidatePath("/settings/github");
+    return { error: "This connection no longer exists. Refresh the page." };
+  }
+  if (!res.ok) return { error: "Couldn't disconnect. Try again." };
+  revalidatePath("/settings/github");
+  revalidatePath("/repositories");
+  return { ok: true };
+}
+
 export async function refreshGitHubRepositories(): Promise<ActionResult> {
   const res = await post("/github/repositories/refresh");
   if (!res) return { error: "The service isn't responding right now. Try again." };
