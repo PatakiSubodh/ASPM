@@ -23,6 +23,7 @@ from fastapi.security import APIKeyHeader
 from neo4j import Driver
 from neo4j.exceptions import ConstraintError
 
+import github
 from auth import get_current_user, init_auth
 from connectors import semgrep, trivy
 from db import close_driver, connect_driver, get_driver, migrate_ownership
@@ -36,6 +37,7 @@ from models import (
     DiscoveryIn,
     FindingIngest,
     IngestParams,
+    InstallationIn,
     TrivyIngestParams,
     RepositoryAssetsIn,
     RepositoryCreate,
@@ -725,6 +727,67 @@ def delete_asset(name: str, current_user: CurrentUser):
         )
     if counters.nodes_deleted == 0:
         raise HTTPException(status_code=404, detail="Asset not found")
+
+
+LINK_INSTALLATION = """
+MATCH (u:User {id: $owner})
+MERGE (i:GitHubInstallation {id: $id})
+ON CREATE SET i.owner = $owner, i.created_at = $now
+WITH u, i
+WHERE i.owner = $owner
+MERGE (u)-[:HAS_INSTALLATION]->(i)
+SET i.account_login = $login,
+    i.account_type = $account_type,
+    i.repository_selection = $selection,
+    i.status = $status,
+    i.updated_at = $now
+RETURN i { .* } AS installation
+"""
+
+
+@app.post("/github/install-url")
+def github_install_url(current_user: CurrentUser):
+    try:
+        issued = github.create_state(current_user["id"])
+        url = github.install_url(issued["state"])
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="GitHub App is not configured")
+    return {"url": url, "nonce": issued["nonce"]}
+
+
+@app.post("/github/installations", status_code=201)
+def link_github_installation(body: InstallationIn, current_user: CurrentUser):
+    try:
+        github.verify_state(body.state, current_user["id"], body.nonce)
+        details = github.get_installation(body.installation_id)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="GitHub App is not configured")
+    except github.InvalidState:
+        raise HTTPException(status_code=400, detail="Invalid or expired install state")
+    except github.GitHubError as error:
+        if error.status == 404:
+            raise HTTPException(status_code=404, detail="Installation not found")
+        raise HTTPException(status_code=502, detail=error.message)
+    account = details.get("account") or {}
+    try:
+        with get_driver().session() as session:
+            record = session.execute_write(
+                lambda tx: tx.run(
+                    LINK_INSTALLATION,
+                    owner=current_user["id"],
+                    id=body.installation_id,
+                    login=account.get("login"),
+                    account_type=account.get("type"),
+                    selection=details.get("repository_selection"),
+                    status="suspended" if details.get("suspended_at") else "active",
+                    now=_now(),
+                ).single()
+            )
+    except ConstraintError:
+        raise HTTPException(status_code=409, detail="Installation is linked to another account")
+    if record is None:
+        raise HTTPException(status_code=409, detail="Installation is linked to another account")
+    return {"installation": record["installation"]}
 
 
 @app.get("/graph", dependencies=signed_in)

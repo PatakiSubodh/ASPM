@@ -1,7 +1,9 @@
 import json
 import os
+import secrets
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -11,6 +13,8 @@ GITHUB_API_VERSION = "2022-11-28"
 REQUEST_TIMEOUT = 15
 JWT_BACKDATE_SECONDS = 60
 JWT_LIFETIME_SECONDS = 540
+STATE_LIFETIME_SECONDS = 600
+STATE_ALGORITHM = "HS256"
 
 
 class GitHubError(Exception):
@@ -18,6 +22,10 @@ class GitHubError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+class InvalidState(Exception):
+    pass
 
 
 def _api_url() -> str:
@@ -80,3 +88,51 @@ def installation_token(
         "POST", f"/app/installations/{int(installation_id)}/access_tokens", app_jwt(), body
     )
     return {"token": payload["token"], "expires_at": payload["expires_at"]}
+
+
+def _state_secret() -> str:
+    secret = os.getenv("INSTALL_STATE_SECRET", "").strip()
+    if not secret:
+        raise RuntimeError("INSTALL_STATE_SECRET is not set")
+    return secret
+
+
+def create_state(user_id: str, now: Optional[int] = None) -> dict:
+    issued = int(time.time() if now is None else now)
+    nonce = secrets.token_urlsafe(16)
+    claims = {
+        "sub": user_id,
+        "nonce": nonce,
+        "iat": issued,
+        "exp": issued + STATE_LIFETIME_SECONDS,
+    }
+    state = jwt.encode(claims, _state_secret(), algorithm=STATE_ALGORITHM)
+    return {"state": state, "nonce": nonce}
+
+
+def verify_state(state: str, user_id: str, nonce: str) -> None:
+    try:
+        claims = jwt.decode(
+            state,
+            _state_secret(),
+            algorithms=[STATE_ALGORITHM],
+            options={"require": ["exp", "sub", "nonce"]},
+        )
+    except jwt.PyJWTError:
+        raise InvalidState() from None
+    if not secrets.compare_digest(str(claims["sub"]).encode(), user_id.encode()):
+        raise InvalidState()
+    if not secrets.compare_digest(str(claims["nonce"]).encode(), nonce.encode()):
+        raise InvalidState()
+
+
+def install_url(state: str) -> str:
+    slug = os.getenv("GITHUB_APP_SLUG", "").strip()
+    if not slug:
+        raise RuntimeError("GITHUB_APP_SLUG is not set")
+    query = urllib.parse.urlencode({"state": state})
+    return f"https://github.com/apps/{urllib.parse.quote(slug)}/installations/new?{query}"
+
+
+def get_installation(installation_id: int) -> dict:
+    return github_request("GET", f"/app/installations/{int(installation_id)}", app_jwt())

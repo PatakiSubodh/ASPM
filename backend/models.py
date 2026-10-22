@@ -200,6 +200,12 @@ class StatusUpdate(BaseModel):
     status: FindingStatus
 
 
+class InstallationIn(BaseModel):
+    installation_id: int = Field(gt=0)
+    state: str = Field(min_length=1, max_length=2048)
+    nonce: str = Field(min_length=1, max_length=256)
+
+
 class ScanFailureIn(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None

@@ -34,6 +34,8 @@ CONSTRAINTS = [
     "FOR (s:Scan) REQUIRE s.id IS UNIQUE",
     "CREATE CONSTRAINT user_id_unique IF NOT EXISTS "
     "FOR (u:User) REQUIRE u.id IS UNIQUE",
+    "CREATE CONSTRAINT github_installation_id_unique IF NOT EXISTS "
+    "FOR (i:GitHubInstallation) REQUIRE i.id IS UNIQUE",
 ]
 
 OWNERSHIP_MIGRATION = """
