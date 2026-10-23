@@ -16,6 +16,19 @@ export interface InstallationSummary {
   revoked: number;
 }
 
+export interface AvailableRepository {
+  full_name: string;
+  url: string | null;
+  private: boolean;
+  language: string | null;
+  branch: string | null;
+}
+
+export interface BranchList {
+  branches: string[];
+  default: string | null;
+}
+
 export function manageInstallationUrl(installation: GitHubInstallation): string {
   if (installation.account_type === "Organization" && installation.account_login) {
     return `https://github.com/organizations/${encodeURIComponent(installation.account_login)}/settings/installations/${installation.id}`;

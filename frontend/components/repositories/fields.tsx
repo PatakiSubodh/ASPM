@@ -62,6 +62,42 @@ export function TextField({
   );
 }
 
+export function ComboField({
+  id,
+  name,
+  label,
+  hint,
+  options,
+  ...props
+}: {
+  id: string;
+  name: string;
+  label: string;
+  hint?: string;
+  options: { value: string; label?: string }[];
+} & Omit<ComponentProps<"input">, "id" | "name" | "list">) {
+  const listId = `${id}-list`;
+  return (
+    <Field id={id} label={label} hint={hint}>
+      <Input
+        id={id}
+        name={name}
+        list={options.length > 0 ? listId : undefined}
+        autoComplete="off"
+        className={FIELD_CONTROL}
+        {...props}
+      />
+      {options.length > 0 && (
+        <datalist id={listId}>
+          {options.map((option) => (
+            <option key={option.value} value={option.value} label={option.label} />
+          ))}
+        </datalist>
+      )}
+    </Field>
+  );
+}
+
 export function SelectField({
   id,
   name,

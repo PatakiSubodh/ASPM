@@ -1,25 +1,75 @@
 "use client";
 
-import { Plus } from "lucide-react";
-import { useState } from "react";
+import { ArrowUpRight, Plus } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { AvailableRepository, BranchList } from "@/lib/github";
 import { ASSET_TYPES, ENVIRONMENTS, type ActionResult } from "@/lib/repositories";
 
-import { SelectField, TextField, ToggleField } from "./fields";
+import { ComboField, SelectField, TextField, ToggleField } from "./fields";
 import { FormDialog } from "./form-dialog";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY } from "./styles";
 
 type Action = (formData: FormData) => Promise<ActionResult>;
 
+export interface GitHubPicker {
+  connected: boolean;
+  manageUrl?: string;
+  loadRepositories: () => Promise<AvailableRepository[]>;
+  loadBranches: (repo: string) => Promise<BranchList | null>;
+}
+
+function sameAddress(a: string, b: string): boolean {
+  const clean = (value: string) =>
+    value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+  return clean(a) === clean(b);
+}
+
 export function AddRepositoryButton({
   action,
   prominent,
+  github,
 }: {
   action: Action;
   prominent?: boolean;
+  github?: GitHubPicker;
 }) {
   const [open, setOpen] = useState(false);
+  const [repositories, setRepositories] = useState<AvailableRepository[]>([]);
+  const [url, setUrl] = useState("");
+  const [loaded, setLoaded] = useState<{ repo: string; branches: string[] } | null>(null);
+  const connected = github?.connected === true;
+  const loadRepositories = github?.loadRepositories;
+  const loadBranches = github?.loadBranches;
+
+  const matched = repositories.find((repo) => repo.url && sameAddress(repo.url, url));
+  const branches = matched && loaded?.repo === matched.full_name ? loaded.branches : [];
+
+  useEffect(() => {
+    if (!open || !connected || !loadRepositories) return;
+    let cancelled = false;
+    loadRepositories().then((found) => {
+      if (!cancelled) setRepositories(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, connected, loadRepositories]);
+
+  const matchedName = matched?.full_name;
+  useEffect(() => {
+    if (!matchedName || !loadBranches) return;
+    let cancelled = false;
+    loadBranches(matchedName).then((result) => {
+      if (!cancelled) setLoaded({ repo: matchedName, branches: result?.branches ?? [] });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [matchedName, loadBranches]);
+
   return (
     <>
       <Button
@@ -38,23 +88,59 @@ export function AddRepositoryButton({
         submitLabel="Add repository"
         action={action}
       >
-        <TextField
-          id="repo-url"
-          name="url"
-          type="url"
-          required
-          autoFocus
-          label="Repository address"
-          placeholder="https://github.com/your-team/your-repo"
-          hint="The name is taken from the end of the address."
-        />
+        <input type="hidden" name="github_repo" value={matched?.full_name ?? ""} />
+        <div className="space-y-2">
+          <ComboField
+            id="repo-url"
+            name="url"
+            type="url"
+            required
+            autoFocus
+            label="Repository address"
+            placeholder="https://github.com/your-team/your-repo"
+            hint={
+              connected
+                ? "Paste an address, or pick one of your GitHub repositories from the list."
+                : "The name is taken from the end of the address."
+            }
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            options={repositories
+              .filter((repo) => repo.url)
+              .map((repo) => ({
+                value: repo.url as string,
+                label: repo.private ? `${repo.full_name} (private)` : repo.full_name,
+              }))}
+          />
+          {connected && github?.manageUrl && (
+            <a
+              href={github.manageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 font-mono text-[11px] font-bold underline decoration-2 underline-offset-4 hover:bg-acid"
+            >
+              Missing a repository? Give ASPM access on GitHub
+              <ArrowUpRight className="size-3.5" />
+            </a>
+          )}
+          {github && !connected && (
+            <Link
+              href="/settings/github"
+              className="inline-flex items-center gap-0.5 font-mono text-[11px] font-bold underline decoration-2 underline-offset-4 hover:bg-acid"
+            >
+              Connect GitHub to pick from your repositories
+              <ArrowUpRight className="size-3.5" />
+            </Link>
+          )}
+        </div>
         <div className="grid gap-5 sm:grid-cols-2">
-          <TextField
+          <ComboField
             id="repo-branch"
             name="branch"
             label="Branch (optional)"
-            placeholder="main"
+            placeholder={matched?.branch ?? "main"}
             hint="Leave empty for the default branch."
+            options={branches.map((branch) => ({ value: branch }))}
           />
           <TextField
             id="repo-language"

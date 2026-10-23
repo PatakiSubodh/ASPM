@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowUpRight, Link2, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import { AuthNotice } from "@/components/auth-notice";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
+import type { BranchList } from "@/lib/github";
 import {
   ASSET_TYPES,
   ENVIRONMENTS,
@@ -26,7 +27,7 @@ import {
   withCurrent,
 } from "@/lib/repositories";
 
-import { SelectField, TextField, ToggleField } from "./fields";
+import { ComboField, SelectField, ToggleField } from "./fields";
 import { FormDialog } from "./form-dialog";
 import {
   BUTTON_PRIMARY,
@@ -59,6 +60,8 @@ export function RepositoryActions({
   linked,
   branchAction,
   assetsAction,
+  githubRepo,
+  loadBranches,
 }: {
   name: string;
   url: string;
@@ -67,8 +70,22 @@ export function RepositoryActions({
   linked: string[];
   branchAction: Action;
   assetsAction: Action;
+  githubRepo?: string;
+  loadBranches?: (repo: string) => Promise<BranchList | null>;
 }) {
   const [branchOpen, setBranchOpen] = useState(false);
+  const [branches, setBranches] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!branchOpen || !githubRepo || !loadBranches) return;
+    let cancelled = false;
+    loadBranches(githubRepo).then((result) => {
+      if (!cancelled) setBranches(result?.branches ?? []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchOpen, githubRepo, loadBranches]);
   const [assetsOpen, setAssetsOpen] = useState(false);
 
   return (
@@ -111,13 +128,14 @@ export function RepositoryActions({
         submitLabel="Save branch"
         action={branchAction}
       >
-        <TextField
+        <ComboField
           id={`branch-${name}`}
           name="branch"
           label="Branch"
           defaultValue={branch ?? ""}
           placeholder="default branch"
           autoFocus
+          options={branches.map((value) => ({ value }))}
         />
       </FormDialog>
 

@@ -15,13 +15,15 @@ import {
   type CatalogEntry,
   relativeTime,
 } from "@/lib/findings";
-import type { InstallationSummary } from "@/lib/github";
+import { type InstallationSummary, manageInstallationUrl } from "@/lib/github";
 import { cn } from "@/lib/utils";
 
 import {
   createAsset,
   createRepository,
   deleteAsset,
+  listAvailableRepositories,
+  listBranches,
   setRepositoryAssets,
   setRepositoryBranch,
   setRepositorySelected,
@@ -85,6 +87,13 @@ export default async function RepositoriesPage() {
     },
   ];
   const current = steps.findIndex((s) => !s.done);
+  const activeInstallation = installations.find((i) => i.installation.status === "active");
+  const picker = {
+    connected: activeInstallation !== undefined,
+    manageUrl: activeInstallation && manageInstallationUrl(activeInstallation.installation),
+    loadRepositories: listAvailableRepositories,
+    loadBranches: listBranches,
+  };
   const revokedCount = entries.filter((e) => e.repository.access_revoked).length;
   const needsPicking =
     installations.some((i) => i.installation.repository_selection === "all") &&
@@ -195,7 +204,11 @@ export default async function RepositoriesPage() {
               </div>
               {index === 0 && (
                 <div className="mt-auto">
-                  <AddRepositoryButton action={createRepository} prominent={index === current} />
+                  <AddRepositoryButton
+                    action={createRepository}
+                    prominent={index === current}
+                    github={picker}
+                  />
                 </div>
               )}
               {index === 1 && (
@@ -221,7 +234,7 @@ export default async function RepositoriesPage() {
                 GitHub account is connected.
               </p>
             </div>
-            {current === -1 && <AddRepositoryButton action={createRepository} />}
+            {current === -1 && <AddRepositoryButton action={createRepository} github={picker} />}
           </div>
 
           {entries.length === 0 ? (
@@ -300,6 +313,12 @@ export default async function RepositoriesPage() {
                         linked={deployed.map((a) => a.name)}
                         branchAction={setRepositoryBranch.bind(null, repository.name)}
                         assetsAction={setRepositoryAssets.bind(null, repository.name)}
+                        githubRepo={
+                          repository.source === "github" && !repository.access_revoked
+                            ? repository.full_name
+                            : undefined
+                        }
+                        loadBranches={listBranches}
                       />
                     </div>
                   </li>

@@ -1,8 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { unstable_rethrow } from "next/navigation";
 
 import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
+import type { AvailableRepository, BranchList } from "@/lib/github";
 import type { ActionResult } from "@/lib/repositories";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -40,7 +42,46 @@ function finish(status: number, expected: number, errors: Record<number, string>
   return { error: errors[status] ?? "Something went wrong. Try again." };
 }
 
+async function readJson<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      cache: "no-store",
+      headers: await apiHeaders(),
+    });
+    redirectIfUnauthorized(res.status);
+    return res.ok ? ((await res.json()) as T) : null;
+  } catch (e) {
+    unstable_rethrow(e);
+    return null;
+  }
+}
+
+export async function listAvailableRepositories(): Promise<AvailableRepository[]> {
+  const data = await readJson<{ repositories: AvailableRepository[] }>(
+    "/github/available-repositories",
+  );
+  return data?.repositories ?? [];
+}
+
+export async function listBranches(repo: string): Promise<BranchList | null> {
+  return readJson<BranchList>(`/github/branches?repo=${encodeURIComponent(repo)}`);
+}
+
 export async function createRepository(formData: FormData): Promise<ActionResult> {
+  const githubRepo = text(formData, "github_repo");
+  if (githubRepo) {
+    const status = await send("POST", "/github/repositories", { full_name: githubRepo });
+    const branch = text(formData, "branch");
+    if (status === 201 && branch) {
+      await send("PATCH", `/repositories/${encodeURIComponent(githubRepo.toLowerCase())}`, {
+        branch,
+      });
+    }
+    return finish(status, 201, {
+      404: "ASPM no longer has access to that repository. Check its access on GitHub.",
+      502: "GitHub didn't answer. Try again in a moment.",
+    });
+  }
   const url = text(formData, "url");
   const name = repositoryName(url);
   if (!name || !/^https?:\/\//i.test(url)) {
