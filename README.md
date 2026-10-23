@@ -127,13 +127,13 @@ Neo4j runs in Docker; the API and the web app run on your machine with hot reloa
 
 ### 1. Environment files (not in git, create them once)
 
-The same `ASPM_API_KEY` must be in `.env` and `backend/.env`, otherwise the scanner and discovery get 401. The Supabase Project URL must match in all three files, otherwise every page gets 401. Generate one with `python -c "import secrets;print(secrets.token_urlsafe(32))"`.
+Local dev uses two files, Docker uses one. Never mix them: `uvicorn` reads only `backend/.env`, `npm run dev` reads only `frontend/.env.local`, and `docker compose` reads only the root `.env`. The Supabase Project URL must be the same in `backend/.env` (`SUPABASE_URL`) and `frontend/.env.local` (`NEXT_PUBLIC_SUPABASE_URL`), otherwise every page gets 401. Generate a key with `python -c "import secrets;print(secrets.token_urlsafe(32))"`.
 
-| File | Create from | Set |
-|---|---|---|
-| `.env` | `cp .env.example .env` | `ASPM_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `ASPM_DEV_OWNER` (your Supabase user id); leave `NEO4J_PASSWORD` as is |
-| `backend/.env` | `cp backend/.env.example backend/.env` | `ASPM_API_KEY` (same value), `SUPABASE_URL` (Supabase Project URL), `ASPM_DEV_OWNER` (your Supabase user id) |
-| `frontend/.env.local` | `cp frontend/.env.local.example frontend/.env.local` | `NEXT_PUBLIC_API_URL=http://localhost:8000`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
+| File | Mode | Create from | Set |
+|---|---|---|---|
+| `backend/.env` | Local dev | `cp backend/.env.example backend/.env` | `ASPM_API_KEY`, `SUPABASE_URL`, `ASPM_DEV_OWNER` (your Supabase user id), the GitHub App values (`GITHUB_APP_*`, `GITHUB_AUTH_REDIRECT_URI`, `INSTALL_STATE_SECRET`) |
+| `frontend/.env.local` | Local dev | `cp frontend/.env.local.example frontend/.env.local` | `NEXT_PUBLIC_API_URL=http://localhost:8000`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
+| `.env` | Docker | `cp .env.example .env` | everything in the Configuration table above; the GitHub private key goes in as one line in `GITHUB_APP_PRIVATE_KEY` |
 
 (PowerShell: use `Copy-Item` instead of `cp`.)
 
@@ -181,7 +181,7 @@ The API refuses to start without `ASPM_API_KEY` or `SUPABASE_URL`. If PowerShell
 | Symptom | Fix |
 |---|---|
 | Web pages show 401 or fetch errors | `SUPABASE_URL` in `backend/.env` differs from the frontend's Supabase URL, or the Supabase project still signs with the legacy JWT secret (Project Settings → JWT Keys) |
-| Scanner or discovery get 401 | `ASPM_API_KEY` differs between `.env` and `backend/.env` |
+| Scanner or discovery get 401 | `ASPM_API_KEY` differs between the API and the scanner or discovery (root `.env` in Docker; `backend/.env` for a local API) |
 | Backend cannot connect to Neo4j | Docker Desktop not running, or Neo4j not `healthy` yet |
 | `pip install` fails on a package | It has no Python 3.14 build at the pinned version; raise its version in `requirements.txt` |
 | Port 3000, 7474, 7687 or 8000 in use | Stop the other program, or change `API_PORT` / `WEB_PORT` |
