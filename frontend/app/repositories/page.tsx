@@ -2,6 +2,7 @@ import { ArrowUpRight, Check } from "lucide-react";
 import Link from "next/link";
 import { unstable_rethrow } from "next/navigation";
 
+import { DismissibleNotice } from "@/components/dismissible-notice";
 import { AddAssetButton, AddRepositoryButton } from "@/components/repositories/add-buttons";
 import { ScanToggle } from "@/components/repositories/scan-toggle";
 import { AssetActions, RepositoryActions } from "@/components/repositories/row-menus";
@@ -141,10 +142,10 @@ export default async function RepositoriesPage() {
       )}
 
       {!error && needsPicking && (
-        <section className="animate-rise brutal bg-acid p-5 text-sm leading-snug">
+        <DismissibleNotice className="animate-rise brutal bg-acid p-5 text-sm leading-snug">
           You gave ASPM access to all your repositories, so none are scanned yet. Switch on{" "}
           <strong>Auto-scan</strong> for the ones you want checked.
-        </section>
+        </DismissibleNotice>
       )}
 
       {!error && revokedCount > 0 && (
