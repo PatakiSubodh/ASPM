@@ -206,6 +206,10 @@ class GitHubLinkIn(BaseModel):
     nonce: str = Field(min_length=1, max_length=256)
 
 
+class GitHubRepositoryIn(BaseModel):
+    full_name: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", max_length=200)
+
+
 class ScanFailureIn(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None

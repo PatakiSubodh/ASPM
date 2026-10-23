@@ -37,6 +37,7 @@ from models import (
     DiscoveryIn,
     FindingIngest,
     GitHubLinkIn,
+    GitHubRepositoryIn,
     IngestParams,
     TrivyIngestParams,
     RepositoryAssetsIn,
@@ -943,6 +944,114 @@ def list_github_installations(current_user: CurrentUser):
             }
             for record in session.run(query, owner=current_user["id"])
         ]
+
+
+ACTIVE_INSTALLATIONS = """
+MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {owner: $owner})
+WHERE i.status = 'active'
+RETURN i.id AS id, i.repository_selection AS selection
+"""
+
+LISTED_REPOSITORY_NAMES = """
+MATCH (repo:Repository {owner: $owner})
+RETURN repo.name AS name
+"""
+
+SELECT_REPOSITORY = """
+MATCH (repo:Repository {owner: $owner, name: $name})
+SET repo.selected = true
+RETURN repo.name AS name
+"""
+
+
+def _granted_repositories(owner: str) -> list[dict]:
+    with get_driver().session() as session:
+        installations = list(session.run(ACTIVE_INSTALLATIONS, owner=owner))
+    granted = []
+    for installation in installations:
+        try:
+            token = github.installation_token(installation["id"])["token"]
+            items = github.list_installation_repositories(token)
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="GitHub App is not configured")
+        except github.GitHubError as error:
+            if error.status == 404:
+                continue
+            raise HTTPException(status_code=502, detail=error.message)
+        granted.append(
+            {
+                "installation_id": installation["id"],
+                "selection": installation["selection"],
+                "token": token,
+                "items": items,
+            }
+        )
+    return granted
+
+
+def _find_granted(owner: str, full_name: str) -> Optional[tuple[dict, dict]]:
+    wanted = full_name.lower()
+    for group in _granted_repositories(owner):
+        for item in group["items"]:
+            if item["full_name"].lower() == wanted:
+                return group, item
+    return None
+
+
+@app.get("/github/available-repositories")
+def available_github_repositories(current_user: CurrentUser):
+    owner = current_user["id"]
+    with get_driver().session() as session:
+        listed = {record["name"] for record in session.run(LISTED_REPOSITORY_NAMES, owner=owner)}
+    available = []
+    for group in _granted_repositories(owner):
+        for item in group["items"]:
+            if _normalize_key(item["full_name"]).lower() in listed:
+                continue
+            available.append(
+                {
+                    "full_name": item["full_name"],
+                    "url": item.get("html_url"),
+                    "private": bool(item.get("private")),
+                    "language": item.get("language"),
+                    "branch": item.get("default_branch"),
+                }
+            )
+    return {"repositories": available}
+
+
+@app.post("/github/repositories", status_code=201)
+def add_github_repository(body: GitHubRepositoryIn, current_user: CurrentUser):
+    owner = current_user["id"]
+    found = _find_granted(owner, body.full_name)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Repository is not granted to ASPM")
+    group, item = found
+    _sync_installation(owner, group["installation_id"], group["selection"])
+    name = _normalize_key(item["full_name"]).lower()
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(SELECT_REPOSITORY, owner=owner, name=name).single()
+        )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Repository is not granted to ASPM")
+    return {"name": record["name"]}
+
+
+@app.get("/github/branches")
+def github_repository_branches(
+    current_user: CurrentUser,
+    repo: str = Query(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", max_length=200),
+):
+    found = _find_granted(current_user["id"], repo)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Repository is not granted to ASPM")
+    group, item = found
+    try:
+        branches = github.list_branches(group["token"], item["full_name"])
+    except github.GitHubError as error:
+        raise HTTPException(status_code=502, detail=error.message)
+    return {"branches": branches, "default": item.get("default_branch")}
 
 
 DISCONNECT_INSTALLATION = """

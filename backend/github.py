@@ -18,6 +18,7 @@ STATE_ALGORITHM = "HS256"
 REPOSITORIES_PER_PAGE = 100
 MAX_REPOSITORIES = 500
 MAX_INSTALLATIONS = 100
+MAX_BRANCHES = 200
 OAUTH_URL = "https://github.com"
 
 
@@ -219,3 +220,20 @@ def list_installation_repositories(token: str) -> list[dict]:
             break
         page += 1
     return repositories[:MAX_REPOSITORIES]
+
+
+def list_branches(token: str, full_name: str) -> list[str]:
+    branches: list[str] = []
+    page = 1
+    path = urllib.parse.quote(full_name, safe="/")
+    while len(branches) < MAX_BRANCHES:
+        batch = github_request(
+            "GET", f"/repos/{path}/branches?per_page={REPOSITORIES_PER_PAGE}&page={page}", token
+        )
+        if not isinstance(batch, list):
+            break
+        branches.extend(item["name"] for item in batch)
+        if len(batch) < REPOSITORIES_PER_PAGE:
+            break
+        page += 1
+    return branches[:MAX_BRANCHES]
