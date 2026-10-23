@@ -17,6 +17,8 @@ STATE_LIFETIME_SECONDS = 600
 STATE_ALGORITHM = "HS256"
 REPOSITORIES_PER_PAGE = 100
 MAX_REPOSITORIES = 500
+MAX_INSTALLATIONS = 100
+OAUTH_URL = "https://github.com"
 
 
 class GitHubError(Exception):
@@ -128,12 +130,74 @@ def verify_state(state: str, user_id: str, nonce: str) -> None:
         raise InvalidState()
 
 
-def install_url(state: str) -> str:
+def install_url() -> str:
     slug = os.getenv("GITHUB_APP_SLUG", "").strip()
     if not slug:
         raise RuntimeError("GITHUB_APP_SLUG is not set")
-    query = urllib.parse.urlencode({"state": state})
-    return f"https://github.com/apps/{urllib.parse.quote(slug)}/installations/new?{query}"
+    return f"https://github.com/apps/{urllib.parse.quote(slug)}/installations/new"
+
+
+def _oauth_settings() -> tuple[str, str, str]:
+    client_id = os.getenv("GITHUB_APP_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GITHUB_APP_CLIENT_SECRET", "").strip()
+    redirect_uri = os.getenv("GITHUB_AUTH_REDIRECT_URI", "").strip()
+    if not (client_id and client_secret and redirect_uri):
+        raise RuntimeError(
+            "GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET and GITHUB_AUTH_REDIRECT_URI must be set"
+        )
+    return client_id, client_secret, redirect_uri
+
+
+def authorize_url(state: str) -> str:
+    client_id, _, redirect_uri = _oauth_settings()
+    query = urllib.parse.urlencode(
+        {"client_id": client_id, "redirect_uri": redirect_uri, "state": state}
+    )
+    return f"{OAUTH_URL}/login/oauth/authorize?{query}"
+
+
+def exchange_code(code: str) -> str:
+    client_id, client_secret, redirect_uri = _oauth_settings()
+    form = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{OAUTH_URL}/login/oauth/access_token",
+        data=form,
+        method="POST",
+        headers={"Accept": "application/json", "User-Agent": "aspm-api"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            payload = json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        raise GitHubError(error.code, f"GitHub responded with {error.code}") from None
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        raise GitHubError(502, "GitHub is unreachable") from None
+    token = payload.get("access_token")
+    if not token:
+        raise GitHubError(400, "GitHub rejected the authorization code")
+    return token
+
+
+def list_user_installations(user_token: str) -> list[dict]:
+    found: list[dict] = []
+    page = 1
+    while len(found) < MAX_INSTALLATIONS:
+        payload = github_request(
+            "GET", f"/user/installations?per_page={REPOSITORIES_PER_PAGE}&page={page}", user_token
+        )
+        batch = payload.get("installations", [])
+        found.extend(batch)
+        if len(batch) < REPOSITORIES_PER_PAGE:
+            break
+        page += 1
+    return found[:MAX_INSTALLATIONS]
 
 
 def get_installation(installation_id: int) -> dict:

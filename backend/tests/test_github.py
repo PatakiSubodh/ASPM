@@ -1,6 +1,7 @@
 import io
 import json
 import urllib.error
+import urllib.parse
 
 import jwt
 import pytest
@@ -140,3 +141,95 @@ def test_unreachable_github_maps_to_502(configured, monkeypatch):
         github.installation_token(42)
 
     assert error.value.status == 502
+
+
+@pytest.fixture
+def oauth(monkeypatch):
+    monkeypatch.setenv("GITHUB_APP_CLIENT_ID", "Iv1.abc")
+    monkeypatch.setenv("GITHUB_APP_CLIENT_SECRET", "shh")
+    monkeypatch.setenv("GITHUB_AUTH_REDIRECT_URI", "http://localhost:3000/github/authorized")
+
+
+def test_oauth_helpers_require_config(monkeypatch):
+    for name in ("GITHUB_APP_CLIENT_ID", "GITHUB_APP_CLIENT_SECRET", "GITHUB_AUTH_REDIRECT_URI"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(RuntimeError):
+        github.authorize_url("s")
+    with pytest.raises(RuntimeError):
+        github.exchange_code("c")
+
+
+def test_exchange_code_posts_credentials_and_returns_token(oauth, monkeypatch):
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["method"] = request.get_method()
+        seen["body"] = urllib.parse.parse_qs(request.data.decode())
+        seen["accept"] = request.get_header("Accept")
+        return FakeResponse(json.dumps({"access_token": "ghu_secret"}).encode())
+
+    monkeypatch.setattr(github.urllib.request, "urlopen", fake_urlopen)
+
+    assert github.exchange_code("the-code") == "ghu_secret"
+    assert seen["url"] == "https://github.com/login/oauth/access_token"
+    assert seen["method"] == "POST"
+    assert seen["accept"] == "application/json"
+    assert seen["body"] == {
+        "client_id": ["Iv1.abc"],
+        "client_secret": ["shh"],
+        "code": ["the-code"],
+        "redirect_uri": ["http://localhost:3000/github/authorized"],
+    }
+
+
+def test_exchange_code_rejects_bad_code(oauth, monkeypatch):
+    monkeypatch.setattr(
+        github.urllib.request,
+        "urlopen",
+        lambda request, timeout: FakeResponse(json.dumps({"error": "bad_verification_code"}).encode()),
+    )
+
+    with pytest.raises(github.GitHubError) as error:
+        github.exchange_code("bad")
+
+    assert error.value.status == 400
+
+
+def test_exchange_code_errors_do_not_leak_secrets(oauth, monkeypatch):
+    def failing_urlopen(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 500, "shh", {}, io.BytesIO(b"shh"))
+
+    monkeypatch.setattr(github.urllib.request, "urlopen", failing_urlopen)
+
+    with pytest.raises(github.GitHubError) as error:
+        github.exchange_code("c")
+
+    assert "shh" not in error.value.message
+
+
+def test_list_user_installations_reads_one_short_page(monkeypatch):
+    seen = []
+
+    def fake(method, path, token, body=None):
+        seen.append((path, token))
+        return {"installations": [{"id": 1}, {"id": 2}]}
+
+    monkeypatch.setattr(github, "github_request", fake)
+
+    assert github.list_user_installations("ghu_x") == [{"id": 1}, {"id": 2}]
+    assert seen == [("/user/installations?per_page=100&page=1", "ghu_x")]
+
+
+def test_list_user_installations_is_capped(monkeypatch):
+    seen = []
+
+    def fake(method, path, token, body=None):
+        seen.append(path)
+        return {"installations": [{"id": n} for n in range(100)]}
+
+    monkeypatch.setattr(github, "github_request", fake)
+
+    assert len(github.list_user_installations("ghu_x")) == github.MAX_INSTALLATIONS
+    assert len(seen) == 1

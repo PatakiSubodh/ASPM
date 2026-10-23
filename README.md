@@ -255,11 +255,11 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `GET` | `/repositories` | The caller's repositories with `selected`, deployed assets, open count and last scan time |
 | `POST` | `/repositories` | Add a repository `{name, url, language?, branch?}` (`source: manual`, `selected: true`); 409 if the name exists |
 | `PATCH` | `/repositories/{name}` | Set `selected` and/or `branch`; `name` may contain `/` (GitHub repositories are named `owner/repo`) |
-| `POST` | `/github/install-url` | Signed, 10-minute `state` and the GitHub App install URL; returns `{url, nonce}` (the web keeps `nonce` in a cookie); 503 if the app is not configured |
-| `POST` | `/github/installations` | Bind a GitHub installation to the caller `{installation_id, state, nonce}`, then sync its repositories; 400 bad or expired state, 404 unknown installation, 409 linked to another account; returns `{installation, sync}` |
+| `POST` | `/github/authorize-url` | Signed, 10-minute `state` and the GitHub authorization URL; returns `{url, nonce}` (the web keeps `nonce` in a cookie); 503 if the app's OAuth settings are missing |
+| `POST` | `/github/link` | Finish the authorization `{code, state, nonce}`: verifies the state, exchanges the code for a short-lived user token, and links only the installations GitHub says that user can access (the client never sends an installation id), then syncs their repositories; 400 bad or expired state or rejected code; returns `{linked: [{installation, sync}], conflicts, install_url}` where `conflicts` counts installations already linked to another account and `install_url` is set only when nothing was found |
 | `GET` | `/github/installations` | The caller's installations with `repositories` (granted) and `revoked` counts |
 | `DELETE` | `/github/installations/{id}` | Disconnect: keeps the installation as `status: disconnected`, marks its repositories `access_revoked` (their `selected` is kept), keeps findings; 404 if not the caller's; returns `{disconnected, revoked}` |
-| `POST` | `/github/installations/{id}/reconnect` | Reactivate an installation the caller already owns (also the target of GitHub's "Redirect on update" callback): re-reads it from GitHub, sets `active` or `suspended`, and syncs repositories; 404 if not the caller's or uninstalled on GitHub (the link is then dropped); returns `{installation, sync}` |
+| `POST` | `/github/installations/{id}/reconnect` | Reactivate an installation the caller already owns (used by the **Reconnect** button): re-reads it from GitHub, sets `active` or `suspended`, and syncs repositories; 404 if not the caller's or uninstalled on GitHub (the link is then dropped); returns `{installation, sync}` |
 | `POST` | `/github/repositories/refresh` | Re-sync the repositories of every active installation of the caller (up to 500 each); new ones start `selected` only when the app was installed on "Only select repositories"; repositories no longer granted become `access_revoked`; returns `{installations, repositories, revoked}` |
 | `PUT` | `/repositories/{name}/assets` | Replace the assets the repository deploys to (`{assets: [names]}`, empty = unmapped); unknown asset names → 422; existing findings are re-linked; returns `{repository, assets, linked, unlinked, backfilled}` |
 | `POST` | `/assets` | Create an asset `{name, environment, type, internet_facing?, image?}` (`source: manual`); 409 if the name exists |
@@ -280,7 +280,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `/assets` | Asset inventory ranked by risk |
 | `/scans` | Scan history with result (done / failed with reason) and ingested / resolved / reopened counts |
 | `/repositories` | Repositories page with a three-step guide for new users: add a repository (dialog), add assets (dialog with environment and type selects), link them (side sheet); per-row menus for branch, edit and delete; a Connect GitHub card when nothing is connected, an "Access revoked" tag and banner, and a prompt to switch on Auto-scan after an "All repositories" install |
-| `/settings/github` | GitHub connections (profile menu → GitHub): Connect GitHub, Add another account, Refresh repositories, Disconnect (becomes **Reconnect**, which never leaves ASPM) per account; `/github/installed` is the Setup URL GitHub redirects to after install |
+| `/settings/github` | GitHub connections (profile menu → GitHub): Connect GitHub, Add another account, Refresh repositories, Disconnect (becomes **Reconnect**, which never leaves ASPM) per account; `/github/authorized` is the Callback URL GitHub redirects to after the user authorizes, and `/github/installed` is the Setup URL after install (it starts a new authorization) |
 
 ## Project layout
 

@@ -36,8 +36,8 @@ from models import (
     CatalogIn,
     DiscoveryIn,
     FindingIngest,
+    GitHubLinkIn,
     IngestParams,
-    InstallationIn,
     TrivyIngestParams,
     RepositoryAssetsIn,
     RepositoryCreate,
@@ -745,37 +745,25 @@ RETURN i { .* } AS installation
 """
 
 
-@app.post("/github/install-url")
-def github_install_url(current_user: CurrentUser):
+@app.post("/github/authorize-url")
+def github_authorize_url(current_user: CurrentUser):
     try:
         issued = github.create_state(current_user["id"])
-        url = github.install_url(issued["state"])
+        url = github.authorize_url(issued["state"])
     except RuntimeError:
         raise HTTPException(status_code=503, detail="GitHub App is not configured")
     return {"url": url, "nonce": issued["nonce"]}
 
 
-@app.post("/github/installations", status_code=201)
-def link_github_installation(body: InstallationIn, current_user: CurrentUser):
-    try:
-        github.verify_state(body.state, current_user["id"], body.nonce)
-        details = github.get_installation(body.installation_id)
-    except RuntimeError:
-        raise HTTPException(status_code=503, detail="GitHub App is not configured")
-    except github.InvalidState:
-        raise HTTPException(status_code=400, detail="Invalid or expired install state")
-    except github.GitHubError as error:
-        if error.status == 404:
-            raise HTTPException(status_code=404, detail="Installation not found")
-        raise HTTPException(status_code=502, detail=error.message)
+def _link_installation(owner: str, details: dict) -> Optional[dict]:
     account = details.get("account") or {}
     try:
         with get_driver().session() as session:
             record = session.execute_write(
                 lambda tx: tx.run(
                     LINK_INSTALLATION,
-                    owner=current_user["id"],
-                    id=body.installation_id,
+                    owner=owner,
+                    id=details["id"],
                     login=account.get("login"),
                     account_type=account.get("type"),
                     selection=details.get("repository_selection"),
@@ -784,13 +772,44 @@ def link_github_installation(body: InstallationIn, current_user: CurrentUser):
                 ).single()
             )
     except ConstraintError:
-        raise HTTPException(status_code=409, detail="Installation is linked to another account")
-    if record is None:
-        raise HTTPException(status_code=409, detail="Installation is linked to another account")
-    synced = _sync_installation(
-        current_user["id"], body.installation_id, details.get("repository_selection")
-    )
-    return {"installation": record["installation"], "sync": synced}
+        return None
+    return record["installation"] if record else None
+
+
+@app.post("/github/link")
+def link_github_installations(body: GitHubLinkIn, current_user: CurrentUser):
+    owner = current_user["id"]
+    try:
+        github.verify_state(body.state, owner, body.nonce)
+        user_token = github.exchange_code(body.code)
+        accessible = github.list_user_installations(user_token)
+        install_page = github.install_url()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="GitHub App is not configured")
+    except github.InvalidState:
+        raise HTTPException(status_code=400, detail="Invalid or expired authorization state")
+    except github.GitHubError as error:
+        if error.status == 400:
+            raise HTTPException(status_code=400, detail="GitHub rejected the authorization")
+        raise HTTPException(status_code=502, detail=error.message)
+    linked = []
+    conflicts = 0
+    for details in accessible:
+        installation = _link_installation(owner, details)
+        if installation is None:
+            conflicts += 1
+            continue
+        sync = (
+            _sync_installation(owner, details["id"], details.get("repository_selection"))
+            if installation["status"] == "active"
+            else None
+        )
+        linked.append({"installation": installation, "sync": sync})
+    return {
+        "linked": linked,
+        "conflicts": conflicts,
+        "install_url": install_page if not linked and not conflicts else None,
+    }
 
 
 SYNC_RENAME_QUERY = """
