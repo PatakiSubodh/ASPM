@@ -75,7 +75,7 @@ def test_refresh_on_selected_installation_starts_selected(client, monkeypatch, i
     response = client.post("/github/repositories/refresh")
 
     assert response.status_code == 200
-    assert response.json() == {"installations": 1, "repositories": 1, "revoked": 0}
+    assert response.json() == {"installations": 1, "repositories": 1, "revoked": 0, "uninstalled": 0}
     repo = stored("api")
     assert repo["selected"] is True
     assert repo["github_repo_id"] == 1
@@ -206,7 +206,7 @@ def test_refresh_skips_suspended_installations(client, monkeypatch, installation
 
     response = client.post("/github/repositories/refresh")
 
-    assert response.json() == {"installations": 0, "repositories": 0, "revoked": 0}
+    assert response.json() == {"installations": 0, "repositories": 0, "revoked": 0, "uninstalled": 0}
     assert stored("api") is None
 
 
@@ -445,3 +445,42 @@ def test_list_installation_repositories_is_capped(monkeypatch):
     monkeypatch.setattr(github, "github_request", fake)
 
     assert len(github.list_installation_repositories("t")) == github.MAX_REPOSITORIES
+
+
+def test_refresh_after_uninstall_disconnects_and_revokes(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+    granted(monkeypatch, [item(1, "api"), item(2, "web")])
+    client.post("/github/repositories/refresh")
+
+    def gone(installation_id):
+        raise github.GitHubError(404, "GitHub responded with 404")
+
+    monkeypatch.setattr(github, "installation_token", gone)
+
+    response = client.post("/github/repositories/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["uninstalled"] == 1
+    assert response.json()["revoked"] == 2
+    assert stored("api")["access_revoked"] is True
+    with main.get_driver().session() as session:
+        status = session.run(
+            "MATCH (i:GitHubInstallation {id: $id, owner: $owner}) RETURN i.status AS status",
+            id=created["id"],
+            owner=TEST_USER_ID,
+        ).single()["status"]
+    assert status == "disconnected"
+    assert client.post("/github/repositories/refresh").json()["installations"] == 0
+
+
+def test_refresh_other_github_errors_still_fail(client, monkeypatch, installation):
+    create, _ = installation
+    create("selected")
+
+    def down(installation_id):
+        raise github.GitHubError(500, "GitHub responded with 500")
+
+    monkeypatch.setattr(github, "installation_token", down)
+
+    assert client.post("/github/repositories/refresh").status_code == 502

@@ -851,6 +851,18 @@ def _sync_installation(owner: str, installation_id: int, selection: Optional[str
     except RuntimeError:
         raise HTTPException(status_code=503, detail="GitHub App is not configured")
     except github.GitHubError as error:
+        if error.status == 404:
+            with get_driver().session() as session:
+                record = session.execute_write(
+                    lambda tx: tx.run(
+                        DISCONNECT_INSTALLATION, owner=owner, id=installation_id, now=_now()
+                    ).single()
+                )
+            return {
+                "repositories": 0,
+                "revoked": record["revoked"] if record else 0,
+                "uninstalled": True,
+            }
         raise HTTPException(status_code=502, detail=error.message)
     repos = [
         {
@@ -896,11 +908,17 @@ def refresh_github_repositories(current_user: CurrentUser):
     """
     with get_driver().session() as session:
         installations = list(session.run(query, owner=current_user["id"]))
-    totals = {"installations": len(installations), "repositories": 0, "revoked": 0}
+    totals = {
+        "installations": len(installations),
+        "repositories": 0,
+        "revoked": 0,
+        "uninstalled": 0,
+    }
     for installation in installations:
         result = _sync_installation(
             current_user["id"], installation["id"], installation["selection"]
         )
+        totals["uninstalled"] += 1 if result.get("uninstalled") else 0
         totals["repositories"] += result["repositories"]
         totals["revoked"] += result["revoked"]
     return totals
