@@ -1,8 +1,11 @@
 import os
 from typing import Optional
 
+from dotenv import load_dotenv
 from fastapi import HTTPException
 from neo4j import Driver, GraphDatabase
+
+load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
