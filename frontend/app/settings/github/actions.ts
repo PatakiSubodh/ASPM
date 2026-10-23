@@ -5,7 +5,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { apiHeaders, redirectIfUnauthorized } from "@/lib/api";
-import { GITHUB_NONCE_COOKIE } from "@/lib/github";
+import { GITHUB_INSTALLING_COOKIE, GITHUB_NONCE_COOKIE } from "@/lib/github";
+import { cookieOptions, requestAuthorization } from "@/lib/github-server";
 import type { ActionResult } from "@/lib/repositories";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -23,20 +24,17 @@ async function post(path: string): Promise<Response | null> {
 }
 
 export async function connectGitHub(): Promise<ActionResult> {
-  const res = await post("/github/install-url");
-  if (!res) return { error: "The service isn't responding right now. Try again." };
-  redirectIfUnauthorized(res.status);
-  if (res.status === 503) return { error: "GitHub isn't set up on this server yet." };
-  if (!res.ok) return { error: "Couldn't start the GitHub connection. Try again." };
-  const { url, nonce } = (await res.json()) as { url: string; nonce: string };
-  (await cookies()).set(GITHUB_NONCE_COOKIE, nonce, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 600,
-    path: "/",
-  });
-  redirect(url);
+  const issued = await requestAuthorization();
+  if ("status" in issued) {
+    redirectIfUnauthorized(issued.status);
+    if (issued.status === 0) return { error: "The service isn't responding right now. Try again." };
+    if (issued.status === 503) return { error: "GitHub isn't set up on this server yet." };
+    return { error: "Couldn't start the GitHub connection. Try again." };
+  }
+  const store = await cookies();
+  store.delete(GITHUB_INSTALLING_COOKIE);
+  store.set(GITHUB_NONCE_COOKIE, issued.nonce, cookieOptions());
+  redirect(issued.url);
 }
 
 export async function disconnectGitHub(installationId: number): Promise<ActionResult> {

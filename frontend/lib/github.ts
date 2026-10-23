@@ -1,4 +1,5 @@
 export const GITHUB_NONCE_COOKIE = "aspm_gh_nonce";
+export const GITHUB_INSTALLING_COOKIE = "aspm_gh_installing";
 
 export interface GitHubInstallation {
   id: number;
@@ -24,6 +25,9 @@ export function manageInstallationUrl(installation: GitHubInstallation): string 
 
 export const INSTALL_ERRORS: Record<string, string> = {
   invalid: "GitHub sent back an incomplete request. Start the connection again.",
+  denied: "GitHub wasn't allowed to confirm who you are. Start again and approve the request.",
+  noinstall:
+    "ASPM couldn't find the GitHub App installed on your account. Finish installing it on GitHub, then connect again.",
   state: "The connection link expired or doesn't belong to this session. Start again.",
   conflict: "That GitHub installation is already linked to another ASPM account.",
   notfound: "That GitHub installation couldn't be found for your account. Start the connection again.",
