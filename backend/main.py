@@ -805,6 +805,16 @@ def link_github_installations(body: GitHubLinkIn, current_user: CurrentUser):
             if installation["status"] == "active"
             else None
         )
+        if installation["status"] == "active" and installation.get("account_login"):
+            with get_driver().session() as session:
+                session.execute_write(
+                    lambda tx: tx.run(
+                        FORGET_STALE_INSTALLATIONS,
+                        owner=owner,
+                        id=details["id"],
+                        login=installation["account_login"],
+                    ).consume()
+                )
         linked.append({"installation": installation, "sync": sync})
     return {
         "linked": linked,
@@ -853,15 +863,9 @@ def _sync_installation(owner: str, installation_id: int, selection: Optional[str
         raise HTTPException(status_code=503, detail="GitHub App is not configured")
     except github.GitHubError as error:
         if error.status == 404:
-            with get_driver().session() as session:
-                record = session.execute_write(
-                    lambda tx: tx.run(
-                        DISCONNECT_INSTALLATION, owner=owner, id=installation_id, now=_now()
-                    ).single()
-                )
             return {
                 "repositories": 0,
-                "revoked": record["revoked"] if record else 0,
+                "revoked": _mark_removed(owner, installation_id),
                 "uninstalled": True,
             }
         raise HTTPException(status_code=502, detail=error.message)
@@ -904,17 +908,27 @@ def _sync_installation(owner: str, installation_id: int, selection: Optional[str
 def refresh_github_repositories(current_user: CurrentUser):
     query = """
     MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {owner: $owner})
-    WHERE i.status = 'active'
-    RETURN i.id AS id, i.repository_selection AS selection
+    WHERE i.status IN ['active', 'disconnected']
+    RETURN i.id AS id, i.repository_selection AS selection, i.status AS status
     """
     with get_driver().session() as session:
-        installations = list(session.run(query, owner=current_user["id"]))
+        found = list(session.run(query, owner=current_user["id"]))
+    installations = [i for i in found if i["status"] == "active"]
     totals = {
         "installations": len(installations),
         "repositories": 0,
         "revoked": 0,
         "uninstalled": 0,
     }
+    for paused in (i for i in found if i["status"] == "disconnected"):
+        try:
+            github.get_installation(paused["id"])
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="GitHub App is not configured")
+        except github.GitHubError as error:
+            if error.status == 404:
+                _mark_removed(current_user["id"], paused["id"])
+                totals["uninstalled"] += 1
     for installation in installations:
         result = _sync_installation(
             current_user["id"], installation["id"], installation["selection"]
@@ -976,6 +990,7 @@ def _granted_repositories(owner: str) -> list[dict]:
             raise HTTPException(status_code=503, detail="GitHub App is not configured")
         except github.GitHubError as error:
             if error.status == 404:
+                _mark_removed(owner, installation["id"])
                 continue
             raise HTTPException(status_code=502, detail=error.message)
         granted.append(
@@ -1063,9 +1078,34 @@ SET repo.access_revoked = true
 RETURN i.id AS id, count(repo) AS revoked
 """
 
+OWNED_INSTALLATION_STATUS = """
+MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {id: $id, owner: $owner})
+RETURN i.status AS status
+"""
+
 OWNED_INSTALLATION = """
 MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {id: $id, owner: $owner})
 RETURN i.id AS id
+"""
+
+MARK_REMOVED = """
+MATCH (:User {id: $owner})-[:HAS_INSTALLATION]->(i:GitHubInstallation {id: $id, owner: $owner})
+SET i.status = 'removed', i.updated_at = $now
+WITH i
+OPTIONAL MATCH (i)-[:GRANTS]->(repo:Repository {owner: $owner})
+SET repo.access_revoked = true
+RETURN i.id AS id, count(repo) AS revoked
+"""
+
+FORGET_INSTALLATION = """
+MATCH (i:GitHubInstallation {id: $id, owner: $owner, status: 'removed'})
+DETACH DELETE i
+"""
+
+FORGET_STALE_INSTALLATIONS = """
+MATCH (i:GitHubInstallation {owner: $owner, status: 'removed', account_login: $login})
+WHERE i.id <> $id
+DETACH DELETE i
 """
 
 REACTIVATE_INSTALLATION = """
@@ -1079,8 +1119,28 @@ RETURN i { .* } AS installation
 """
 
 
+def _mark_removed(owner: str, installation_id: int) -> int:
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(MARK_REMOVED, owner=owner, id=installation_id, now=_now()).single()
+        )
+    return record["revoked"] if record else 0
+
+
 @app.delete("/github/installations/{installation_id}")
 def disconnect_github_installation(installation_id: int, current_user: CurrentUser):
+    with get_driver().session() as session:
+        state = session.run(
+            OWNED_INSTALLATION_STATUS, owner=current_user["id"], id=installation_id
+        ).single()
+    if state is not None and state["status"] == "removed":
+        with get_driver().session() as session:
+            session.execute_write(
+                lambda tx: tx.run(
+                    FORGET_INSTALLATION, owner=current_user["id"], id=installation_id
+                ).consume()
+            )
+        return {"forgotten": installation_id}
     with get_driver().session() as session:
         record = session.execute_write(
             lambda tx: tx.run(
@@ -1105,14 +1165,7 @@ def reconnect_github_installation(installation_id: int, current_user: CurrentUse
         raise HTTPException(status_code=503, detail="GitHub App is not configured")
     except github.GitHubError as error:
         if error.status == 404:
-            with get_driver().session() as session:
-                session.execute_write(
-                    lambda tx: tx.run(
-                        "MATCH (i:GitHubInstallation {id: $id, owner: $owner}) DETACH DELETE i",
-                        id=installation_id,
-                        owner=owner,
-                    ).consume()
-                )
+            _mark_removed(owner, installation_id)
             raise HTTPException(status_code=404, detail="Installation not found")
         raise HTTPException(status_code=502, detail=error.message)
     account = details.get("account") or {}

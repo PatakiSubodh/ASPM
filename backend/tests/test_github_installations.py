@@ -280,3 +280,33 @@ def test_link_requires_login(client):
     )
 
     assert response.status_code == 401
+
+
+def test_link_clears_removed_connection_of_same_account(client, monkeypatch, installation_id):
+    stale = installation_id + 1
+    with main.get_driver().session() as session:
+        session.run(
+            """
+            MERGE (u:User {id: $owner})
+            CREATE (u)-[:HAS_INSTALLATION]->(:GitHubInstallation {
+              id: $id, owner: $owner, status: 'removed', account_login: 'octo-again'
+            })
+            """,
+            owner=TEST_USER_ID,
+            id=stale,
+        ).consume()
+    try:
+        fake_github(
+            monkeypatch,
+            [details(installation_id, account={"login": "octo-again", "type": "User"})],
+        )
+        state, nonce = issue(client)
+
+        link(client, state, nonce)
+
+        ids = [r["installation"]["id"] for r in client.get("/github/installations").json()]
+        assert installation_id in ids
+        assert stale not in ids
+    finally:
+        with main.get_driver().session() as session:
+            session.run("MATCH (i:GitHubInstallation {id: $id}) DETACH DELETE i", id=stale).consume()

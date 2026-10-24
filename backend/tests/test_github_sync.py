@@ -350,9 +350,21 @@ def test_reconnect_suspended_installation_skips_sync(client, monkeypatch, instal
     assert response.json()["sync"] is None
 
 
-def test_reconnect_uninstalled_on_github_is_404_and_drops_link(client, monkeypatch, installation):
+def installation_status(installation_id):
+    with main.get_driver().session() as session:
+        record = session.run(
+            "MATCH (i:GitHubInstallation {id: $id, owner: $owner}) RETURN i.status AS status",
+            id=installation_id,
+            owner=TEST_USER_ID,
+        ).single()
+    return record["status"] if record else None
+
+
+def test_reconnect_uninstalled_on_github_is_404_and_marks_removed(client, monkeypatch, installation):
     create, created = installation
     create("selected")
+    granted(monkeypatch, [item(1, "api")])
+    client.post("/github/repositories/refresh")
     client.delete(f"/github/installations/{created['id']}")
 
     def gone(installation_id):
@@ -361,9 +373,8 @@ def test_reconnect_uninstalled_on_github_is_404_and_drops_link(client, monkeypat
     monkeypatch.setattr(github, "get_installation", gone)
 
     assert client.post(f"/github/installations/{created['id']}/reconnect").status_code == 404
-    assert all(
-        r["installation"]["id"] != created["id"] for r in client.get("/github/installations").json()
-    )
+    assert installation_status(created["id"]) == "removed"
+    assert stored("api")["access_revoked"] is True
 
 
 def test_reconnect_other_users_installation_is_404(client, monkeypatch, installation):
@@ -447,7 +458,7 @@ def test_list_installation_repositories_is_capped(monkeypatch):
     assert len(github.list_installation_repositories("t")) == github.MAX_REPOSITORIES
 
 
-def test_refresh_after_uninstall_disconnects_and_revokes(client, monkeypatch, installation):
+def test_refresh_after_uninstall_marks_removed_and_revokes(client, monkeypatch, installation):
     create, created = installation
     create("selected")
     granted(monkeypatch, [item(1, "api"), item(2, "web")])
@@ -470,7 +481,7 @@ def test_refresh_after_uninstall_disconnects_and_revokes(client, monkeypatch, in
             id=created["id"],
             owner=TEST_USER_ID,
         ).single()["status"]
-    assert status == "disconnected"
+    assert status == "removed"
     assert client.post("/github/repositories/refresh").json()["installations"] == 0
 
 
@@ -484,3 +495,78 @@ def test_refresh_other_github_errors_still_fail(client, monkeypatch, installatio
     monkeypatch.setattr(github, "installation_token", down)
 
     assert client.post("/github/repositories/refresh").status_code == 502
+
+
+def test_refresh_detects_uninstall_of_a_paused_connection(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+    granted(monkeypatch, [item(1, "api")])
+    client.post("/github/repositories/refresh")
+    client.delete(f"/github/installations/{created['id']}")
+
+    def gone(installation_id):
+        raise github.GitHubError(404, "GitHub responded with 404")
+
+    monkeypatch.setattr(github, "get_installation", gone)
+
+    response = client.post("/github/repositories/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["uninstalled"] == 1
+    assert installation_status(created["id"]) == "removed"
+
+
+def test_paused_connection_still_installed_stays_paused_on_refresh(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+    client.delete(f"/github/installations/{created['id']}")
+    monkeypatch.setattr(github, "get_installation", lambda installation_id: {"id": installation_id})
+
+    response = client.post("/github/repositories/refresh")
+
+    assert response.json()["uninstalled"] == 0
+    assert installation_status(created["id"]) == "disconnected"
+
+
+def test_available_repositories_detects_uninstall(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+
+    def gone(installation_id):
+        raise github.GitHubError(404, "GitHub responded with 404")
+
+    monkeypatch.setattr(github, "installation_token", gone)
+
+    response = client.get("/github/available-repositories")
+
+    assert response.json() == {"repositories": []}
+    assert installation_status(created["id"]) == "removed"
+
+
+def test_removed_connection_can_be_forgotten_but_keeps_repositories(client, monkeypatch, installation):
+    create, created = installation
+    create("selected")
+    granted(monkeypatch, [item(1, "api")])
+    client.post("/github/repositories/refresh")
+
+    def gone(installation_id):
+        raise github.GitHubError(404, "GitHub responded with 404")
+
+    monkeypatch.setattr(github, "installation_token", gone)
+    client.post("/github/repositories/refresh")
+
+    response = client.delete(f"/github/installations/{created['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == {"forgotten": created["id"]}
+    assert installation_status(created["id"]) is None
+    assert stored("api")["access_revoked"] is True
+
+
+def test_active_connection_is_paused_not_forgotten(client, installation):
+    create, created = installation
+    create("selected")
+
+    client.delete(f"/github/installations/{created['id']}")
+
+    assert installation_status(created["id"]) == "disconnected"
