@@ -66,7 +66,7 @@ export async function reconnectGitHub(installationId: number): Promise<ActionRes
   if (res.status === 404) {
     revalidatePath("/settings/github");
     return {
-      error: "GitHub no longer has this installation. Use Add another account to connect again.",
+      error: "The app was uninstalled on GitHub. Use Connect again to restore access.",
     };
   }
   if (!res.ok) return { error: "GitHub didn't answer. Try again in a moment." };

@@ -129,7 +129,7 @@ export default async function RepositoriesPage() {
         </StateCard>
       )}
 
-      {!error && installations.length === 0 && (
+      {!error && !installations.some((i) => i.installation.status === "active") && (
         <section
           className="animate-rise brutal flex flex-wrap items-center justify-between gap-5 bg-acid p-6"
           style={{ animationDelay: "30ms" }}

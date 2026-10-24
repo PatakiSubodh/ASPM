@@ -6,7 +6,7 @@ export interface GitHubInstallation {
   account_login?: string;
   account_type?: string;
   repository_selection?: "all" | "selected";
-  status: "active" | "suspended" | "disconnected";
+  status: "active" | "suspended" | "disconnected" | "removed";
   updated_at?: string;
 }
 

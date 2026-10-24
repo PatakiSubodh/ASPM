@@ -20,6 +20,7 @@ const STATUS_LABELS = {
   active: "● Active",
   suspended: "Suspended",
   disconnected: "Disconnected",
+  removed: "Uninstalled",
 } as const;
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -54,7 +55,7 @@ export default async function GitHubSettingsPage({
 
   const notice = code ? (INSTALL_ERRORS[code] ?? INSTALL_ERRORS.github) : null;
   const connected = installations.length > 0;
-  const hasActive = installations.some((i) => i.installation.status === "active");
+  const canRefresh = installations.some((i) => i.installation.status !== "removed");
 
   return (
     <div className="space-y-12">
@@ -97,7 +98,7 @@ export default async function GitHubSettingsPage({
               </p>
             </div>
             <div className="flex flex-wrap items-start gap-4">
-              {hasActive && (
+              {canRefresh && (
                 <GitHubActionButton
                   action={refreshGitHubRepositories}
                   pendingLabel="Refreshing…"
@@ -147,20 +148,48 @@ export default async function GitHubSettingsPage({
                       Repositories
                     </p>
                     <p className="font-mono text-sm">
-                      {repositories} granted
-                      {revoked > 0 && ` · ${revoked} no longer accessible`}
+                      {installation.status === "removed"
+                        ? `${repositories} kept · access revoked`
+                        : `${repositories} granted${revoked > 0 ? ` · ${revoked} no longer accessible` : ""}`}
                     </p>
+                    {installation.status === "removed" && (
+                      <p className="font-mono text-[11px] text-muted-foreground">
+                        The app was uninstalled on GitHub. Findings stay; connect again to restore
+                        access.
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-4">
                     <span
                       className={cn(
                         "inline-flex w-fit -rotate-2 border-2 border-foreground px-2 py-0.5 font-mono text-[11px] font-bold uppercase tracking-widest shadow-brutal-sm",
-                        installation.status === "active" ? "bg-acid" : "bg-low",
+                        installation.status === "active"
+                          ? "bg-acid"
+                          : installation.status === "removed"
+                            ? "bg-crit"
+                            : "bg-low",
                       )}
                     >
                       {STATUS_LABELS[installation.status]}
                     </span>
-                    {installation.status === "disconnected" ? (
+                    {installation.status === "removed" ? (
+                      <div className="flex flex-wrap items-start gap-3">
+                        <GitHubActionButton
+                          action={connectGitHub}
+                          pendingLabel="Opening GitHub…"
+                          prominent
+                        >
+                          <Plug className="size-4" />
+                          Connect again
+                        </GitHubActionButton>
+                        <GitHubActionButton
+                          action={disconnectGitHub.bind(null, installation.id)}
+                          pendingLabel="Removing…"
+                        >
+                          Remove
+                        </GitHubActionButton>
+                      </div>
+                    ) : installation.status === "disconnected" ? (
                       <GitHubActionButton
                         action={reconnectGitHub.bind(null, installation.id)}
                         pendingLabel="Reconnecting…"
