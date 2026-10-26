@@ -584,11 +584,11 @@ function NodeDetails({
         )}
         <dl className="divide-y-2 divide-dashed divide-foreground/20">
           {Object.entries(node.properties).map(([key, value]) => (
-            <div key={key} className="grid grid-cols-[96px_1fr] gap-3 py-2 text-sm">
+            <div key={key} className="grid grid-cols-[96px_minmax(0,1fr)] gap-3 py-2 text-sm">
               <dt className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                {key.replace("_", " ")}
+                {key.replaceAll("_", " ")}
               </dt>
-              <dd className="break-words">
+              <dd className="min-w-0 wrap-anywhere">
                 <PropertyValue name={key} value={value} />
               </dd>
             </div>
