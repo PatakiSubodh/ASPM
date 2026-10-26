@@ -8,6 +8,7 @@ This lets us answer the core ASPM question: "which production assets are
 exposed by which vulnerable code, and where did that vulnerability come from?"
 """
 
+import asyncio
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -31,6 +32,7 @@ from db import close_driver, connect_driver, get_driver, migrate_ownership
 from ingest import _now, ingest_batch, require_known_repository, run_scan
 from models import (
     ACTIVE_STATUSES,
+    DEFAULT_SCANNERS,
     STATUSES,
     AssetIn,
     AssetUpdate,
@@ -48,6 +50,7 @@ from models import (
     RepositoryUpdate,
     ScanFailureIn,
     ScanRunIn,
+    ScheduleIn,
     StatusUpdate,
     _normalize_key,
 )
@@ -61,6 +64,16 @@ DEV_OWNER = os.getenv("ASPM_DEV_OWNER", "")
 SCAN_COOLDOWN_DAYS = int(os.getenv("SCAN_COOLDOWN_DAYS", "7"))
 JOB_LEASE_MINUTES = int(os.getenv("JOB_LEASE_MINUTES", "30"))
 CLAIM_ATTEMPTS = 5
+SCHEDULER_INTERVAL_SECONDS = int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "300"))
+
+
+async def scheduler_loop():
+    while True:
+        try:
+            await asyncio.to_thread(schedule_scans)
+        except Exception:
+            pass
+        await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
@@ -72,7 +85,10 @@ async def lifespan(app: FastAPI):
     if DEV_OWNER:
         migrate_ownership(db, DEV_OWNER)
         load_catalog_file(db, DEV_OWNER)
+    scheduler = asyncio.create_task(scheduler_loop()) if SCHEDULER_INTERVAL_SECONDS > 0 else None
     yield
+    if scheduler is not None:
+        scheduler.cancel()
     close_driver()
 
 
@@ -681,6 +697,30 @@ def set_repository_assets(name: str, body: RepositoryAssetsIn, current_user: Cur
             status_code=422, detail=f"Unknown assets: {', '.join(result['missing'])}"
         )
     return result
+
+
+@app.put("/repositories/{name:path}/schedule")
+def set_repository_schedule(name: str, body: ScheduleIn, current_user: CurrentUser):
+    query = f"""
+    MATCH (repo:Repository {{owner: $owner, name: $name}})
+    SET repo.schedule_weekday = $weekday, repo.schedule_hour = $hour,
+        repo.schedule_set_at = CASE WHEN $weekday IS NULL THEN null ELSE $now END
+    RETURN {REPOSITORY_PROJECTION} AS repository
+    """
+    with get_driver().session() as session:
+        record = session.execute_write(
+            lambda tx: tx.run(
+                query,
+                owner=current_user["id"],
+                name=_path_key(name),
+                weekday=body.weekday,
+                hour=body.hour,
+                now=_now(),
+            ).single()
+        )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return {"repository": record["repository"]}
 
 
 @app.post("/assets", status_code=201)
@@ -1296,7 +1336,7 @@ def record_failed_scan(failure: ScanFailureIn, owner: Owner):
 
 
 SCAN_JOB_PROJECTION = (
-    "job { .id, .repository_name, .status, .scanners, .requested_at, .requested_by }"
+    "job { .id, .repository_name, .status, .scanners, .requested_at, .requested_by, .trigger }"
 )
 
 SCAN_JOB_STATE = """
@@ -1309,11 +1349,28 @@ QUEUE_SCAN_JOB = f"""
 MATCH (repo:Repository {{owner: $owner, name: $name}})
 CREATE (repo)-[:HAS_JOB]->(job:ScanJob {{
   id: $id, owner: $owner, repository_name: repo.name, active_repository: repo.name,
-  status: 'queued', scanners: $scanners, requested_at: $now, requested_by: $owner
+  status: 'queued', scanners: $scanners, requested_at: $now, requested_by: $requested_by,
+  trigger: $trigger
 }})
 SET repo.last_scan_requested_at = $now
 RETURN {SCAN_JOB_PROJECTION} AS job
 """
+
+
+def _queue_job(owner: str, name: str, scanners: list[str], requested_by: str, trigger: str, now: str):
+    with get_driver().session() as session:
+        return session.execute_write(
+            lambda tx: tx.run(
+                QUEUE_SCAN_JOB,
+                owner=owner,
+                name=name,
+                id=uuid4().hex,
+                scanners=scanners,
+                requested_by=requested_by,
+                trigger=trigger,
+                now=now,
+            ).single()
+        )
 
 
 @app.post("/scans/run", status_code=201)
@@ -1335,22 +1392,75 @@ def queue_scan(body: ScanRunIn, current_user: CurrentUser):
                 headers={"Retry-After": str(int(wait.total_seconds()) + 1)},
             )
     try:
-        with get_driver().session() as session:
-            record = session.execute_write(
-                lambda tx: tx.run(
-                    QUEUE_SCAN_JOB,
-                    owner=owner,
-                    name=body.repository,
-                    id=uuid4().hex,
-                    scanners=body.scanners,
-                    now=_now(),
-                ).single()
-            )
+        record = _queue_job(owner, body.repository, body.scanners, owner, "manual", _now())
     except ConstraintError:
         raise HTTPException(status_code=409, detail="A scan is already queued for this repository")
     if record is None:
         raise HTTPException(status_code=404, detail="Repository not found")
     return {"job": record["job"]}
+
+
+SCHEDULE_CANDIDATES = """
+MATCH (repo:Repository)
+WHERE ($owner IS NULL OR repo.owner = $owner)
+  AND coalesce(repo.selected, true) AND NOT coalesce(repo.access_revoked, false)
+OPTIONAL MATCH (repo)-[:HAS_JOB]->(job:ScanJob)
+WITH repo, collect(job) AS jobs
+WHERE none(j IN jobs WHERE j.status IN ['queued', 'claimed'])
+  AND ((size(jobs) = 0 AND repo.last_scanned_at IS NULL) OR repo.schedule_weekday IS NOT NULL)
+RETURN repo.owner AS owner, repo.name AS name,
+       size(jobs) = 0 AND repo.last_scanned_at IS NULL AS first,
+       repo.schedule_weekday AS weekday, repo.schedule_hour AS hour,
+       repo.schedule_set_at AS set_at,
+       reduce(m = null, j IN jobs |
+              CASE WHEN m IS NULL OR j.requested_at > m THEN j.requested_at ELSE m END) AS last_requested,
+       reduce(m = null, j IN [j IN jobs WHERE j.status = 'done'] |
+              CASE WHEN m IS NULL OR j.requested_at > m THEN j.requested_at ELSE m END) AS last_done
+"""
+
+
+def _last_slot(now: datetime, weekday: int, hour: int) -> datetime:
+    slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    slot -= timedelta(days=(now.weekday() - weekday) % 7)
+    if slot > now:
+        slot -= timedelta(days=7)
+    return slot
+
+
+def _due_slot(row, now: datetime) -> Optional[datetime]:
+    slot = _last_slot(now, row["weekday"], row["hour"])
+    if row["set_at"] and datetime.fromisoformat(row["set_at"]) > slot:
+        return None
+    if row["last_requested"] and datetime.fromisoformat(row["last_requested"]) >= slot:
+        return None
+    if row["last_done"] and datetime.fromisoformat(row["last_done"]) + timedelta(days=SCAN_COOLDOWN_DAYS) > now:
+        return None
+    return slot
+
+
+def schedule_scans(now: Optional[datetime] = None, owner: Optional[str] = None) -> dict:
+    now = now or datetime.now(timezone.utc)
+    with get_driver().session() as session:
+        rows = list(session.run(SCHEDULE_CANDIDATES, owner=owner))
+    queued = {"first": 0, "schedule": 0}
+    for row in rows:
+        if row["first"]:
+            trigger, requested_at = "first", now
+        else:
+            requested_at = _due_slot(row, now)
+            if requested_at is None:
+                continue
+            trigger = "schedule"
+        try:
+            record = _queue_job(
+                row["owner"], row["name"], list(DEFAULT_SCANNERS), "scheduler", trigger,
+                requested_at.isoformat(),
+            )
+        except ConstraintError:
+            continue
+        if record is not None:
+            queued[trigger] += 1
+    return queued
 
 
 CLAIM_SCAN_JOB = f"""

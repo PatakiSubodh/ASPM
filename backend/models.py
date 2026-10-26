@@ -210,10 +210,13 @@ class GitHubRepositoryIn(BaseModel):
     full_name: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", max_length=200)
 
 
+DEFAULT_SCANNERS = ("trivy", "semgrep")
+
+
 class ScanRunIn(BaseModel):
     repository: str
     scanners: list[Literal["trivy", "semgrep"]] = Field(
-        default_factory=lambda: ["trivy", "semgrep"], min_length=1
+        default_factory=lambda: list(DEFAULT_SCANNERS), min_length=1
     )
 
     @field_validator("repository")
@@ -225,6 +228,17 @@ class ScanRunIn(BaseModel):
     @classmethod
     def dedupe_scanners(cls, v: list[str]) -> list[str]:
         return list(dict.fromkeys(v))
+
+
+class ScheduleIn(BaseModel):
+    weekday: Optional[int] = Field(default=None, ge=0, le=6)
+    hour: Optional[int] = Field(default=None, ge=0, le=23)
+
+    @model_validator(mode="after")
+    def check_pair(self) -> "ScheduleIn":
+        if (self.weekday is None) != (self.hour is None):
+            raise ValueError("weekday and hour must both be set or both be null")
+        return self
 
 
 class JobCompleteIn(BaseModel):

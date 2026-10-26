@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 os.environ.setdefault("ASPM_API_KEY", "pytest-key")
 os.environ.setdefault("SUPABASE_URL", "https://pytest.supabase.co")
+os.environ["SCHEDULER_INTERVAL_SECONDS"] = "0"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import auth
