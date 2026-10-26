@@ -40,6 +40,7 @@ from models import (
     GitHubLinkIn,
     GitHubRepositoryIn,
     IngestParams,
+    JobCompleteIn,
     TrivyIngestParams,
     RepositoryAssetsIn,
     RepositoryCreate,
@@ -58,6 +59,8 @@ ASPM_API_KEY = os.getenv("ASPM_API_KEY", "")
 CATALOG_PATH = os.getenv("CATALOG_PATH", "/app/catalog.yaml")
 DEV_OWNER = os.getenv("ASPM_DEV_OWNER", "")
 SCAN_COOLDOWN_DAYS = int(os.getenv("SCAN_COOLDOWN_DAYS", "7"))
+JOB_LEASE_MINUTES = int(os.getenv("JOB_LEASE_MINUTES", "30"))
+CLAIM_ATTEMPTS = 5
 
 
 @asynccontextmanager
@@ -1348,6 +1351,141 @@ def queue_scan(body: ScanRunIn, current_user: CurrentUser):
     if record is None:
         raise HTTPException(status_code=404, detail="Repository not found")
     return {"job": record["job"]}
+
+
+CLAIM_SCAN_JOB = f"""
+MATCH (job:ScanJob)
+WHERE job.status = 'queued' OR (job.status = 'claimed' AND job.lease_expires_at < $now)
+WITH job ORDER BY job.requested_at LIMIT 1
+SET job._LOCK_ = true
+REMOVE job._LOCK_
+WITH job
+WHERE job.status = 'queued' OR (job.status = 'claimed' AND job.lease_expires_at < $now)
+SET job.status = 'claimed', job.claim_id = $claim_id, job.claimed_at = $now,
+    job.lease_expires_at = $lease, job.attempts = coalesce(job.attempts, 0) + 1
+WITH job
+MATCH (repo:Repository {{owner: job.owner}})-[:HAS_JOB]->(job)
+OPTIONAL MATCH (i:GitHubInstallation {{owner: job.owner}})-[:GRANTS]->(repo)
+WITH job, repo, i ORDER BY CASE WHEN i.status = 'active' THEN 0 ELSE 1 END
+WITH job, repo, collect(i)[0] AS i
+RETURN {SCAN_JOB_PROJECTION} AS job,
+       job.owner AS owner,
+       job.lease_expires_at AS lease_expires_at,
+       repo {{ .name, .url, .branch, .full_name, .github_repo_id }} AS repository,
+       coalesce(repo.access_revoked, false) AS revoked,
+       i {{ .id, .status }} AS installation
+"""
+
+FINISH_SCAN_JOB = f"""
+MATCH (job:ScanJob {{id: $id}})
+SET job._LOCK_ = true
+REMOVE job._LOCK_
+WITH job
+WHERE job.status = 'claimed' AND job.claim_id = $claim_id
+SET job.status = $status, job.finished_at = $now, job.error = $error
+REMOVE job.active_repository, job.claim_id, job.lease_expires_at
+WITH job
+OPTIONAL MATCH (scan:Scan {{owner: job.owner}}) WHERE scan.id IN $scan_ids
+FOREACH (s IN CASE WHEN scan IS NULL THEN [] ELSE [scan] END | MERGE (job)-[:PRODUCED]->(s))
+RETURN {SCAN_JOB_PROJECTION} AS job, job.finished_at AS finished_at, count(scan) AS linked
+"""
+
+RELEASE_SCAN_JOB = """
+MATCH (job:ScanJob {id: $id, claim_id: $claim_id})
+SET job.status = 'queued'
+REMOVE job.claim_id, job.claimed_at, job.lease_expires_at
+"""
+
+
+def _finish_job(job_id: str, claim_id: str, status: str, error: Optional[str], scan_ids=()):
+    with get_driver().session() as session:
+        return session.execute_write(
+            lambda tx: tx.run(
+                FINISH_SCAN_JOB,
+                id=job_id,
+                claim_id=claim_id,
+                status=status,
+                error=error,
+                scan_ids=list(scan_ids),
+                now=_now(),
+            ).single()
+        )
+
+
+def _release_job(job_id: str, claim_id: str) -> None:
+    with get_driver().session() as session:
+        session.execute_write(
+            lambda tx: tx.run(RELEASE_SCAN_JOB, id=job_id, claim_id=claim_id).consume()
+        )
+
+
+def _job_refusal(record) -> Optional[str]:
+    if record["revoked"]:
+        return "Repository access was revoked on GitHub"
+    installation = record["installation"]
+    if installation is not None and installation["status"] != "active":
+        return "GitHub connection is not active"
+    return None
+
+
+@app.post("/jobs/claim", dependencies=protected)
+def claim_scan_job():
+    for _ in range(CLAIM_ATTEMPTS):
+        claim_id = secrets.token_urlsafe(24)
+        lease = datetime.now(timezone.utc) + timedelta(minutes=JOB_LEASE_MINUTES)
+        with get_driver().session() as session:
+            record = session.execute_write(
+                lambda tx: tx.run(
+                    CLAIM_SCAN_JOB, claim_id=claim_id, now=_now(), lease=lease.isoformat()
+                ).single()
+            )
+        if record is None:
+            return {"job": None}
+        job = record["job"]
+        refusal = _job_refusal(record)
+        if refusal:
+            _finish_job(job["id"], claim_id, "failed", refusal)
+            continue
+        token = None
+        installation = record["installation"]
+        if installation is not None:
+            repository_id = record["repository"].get("github_repo_id")
+            try:
+                token = github.installation_token(
+                    installation["id"], [repository_id] if repository_id else None
+                )
+            except RuntimeError:
+                _release_job(job["id"], claim_id)
+                raise HTTPException(status_code=503, detail="GitHub App is not configured")
+            except github.GitHubError as error:
+                if error.status != 404:
+                    _release_job(job["id"], claim_id)
+                    raise HTTPException(status_code=502, detail=error.message)
+                _mark_removed(record["owner"], installation["id"])
+                _finish_job(job["id"], claim_id, "failed", "GitHub App was uninstalled")
+                continue
+        return {
+            "job": job,
+            "owner": record["owner"],
+            "claim_id": claim_id,
+            "lease_expires_at": record["lease_expires_at"],
+            "repository": record["repository"],
+            "token": token["token"] if token else None,
+            "token_expires_at": token["expires_at"] if token else None,
+        }
+    return {"job": None}
+
+
+@app.post("/jobs/{job_id}/complete", dependencies=protected)
+def complete_scan_job(job_id: str, body: JobCompleteIn):
+    record = _finish_job(job_id, body.claim_id, body.status, body.error, body.scan_ids)
+    if record is not None:
+        return {"job": record["job"], "finished_at": record["finished_at"], "linked": record["linked"]}
+    with get_driver().session() as session:
+        exists = session.run("MATCH (job:ScanJob {id: $id}) RETURN job.id", id=job_id).single()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    raise HTTPException(status_code=409, detail="Job is not claimed with this claim_id")
 
 
 @app.get("/scans/failing", dependencies=signed_in)

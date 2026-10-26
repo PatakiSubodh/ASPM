@@ -227,6 +227,19 @@ class ScanRunIn(BaseModel):
         return list(dict.fromkeys(v))
 
 
+class JobCompleteIn(BaseModel):
+    claim_id: str = Field(min_length=1, max_length=64)
+    status: Literal["done", "failed"]
+    scan_ids: list[str] = Field(default_factory=list, max_length=20)
+    error: Optional[str] = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def check_error(self) -> "JobCompleteIn":
+        if self.status == "failed" and not (self.error or "").strip():
+            raise ValueError("error is required when status is failed")
+        return self
+
+
 class ScanFailureIn(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None
