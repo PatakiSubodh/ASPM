@@ -11,6 +11,7 @@ exposed by which vulnerable code, and where did that vulnerability come from?"
 import os
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Optional
 from uuid import uuid4
@@ -45,6 +46,7 @@ from models import (
     RepositoryIn,
     RepositoryUpdate,
     ScanFailureIn,
+    ScanRunIn,
     StatusUpdate,
     _normalize_key,
 )
@@ -55,6 +57,7 @@ load_dotenv()
 ASPM_API_KEY = os.getenv("ASPM_API_KEY", "")
 CATALOG_PATH = os.getenv("CATALOG_PATH", "/app/catalog.yaml")
 DEV_OWNER = os.getenv("ASPM_DEV_OWNER", "")
+SCAN_COOLDOWN_DAYS = int(os.getenv("SCAN_COOLDOWN_DAYS", "7"))
 
 
 @asynccontextmanager
@@ -1287,6 +1290,64 @@ def record_failed_scan(failure: ScanFailureIn, owner: Owner):
             ).consume()
         )
     return {"scan_id": scan_id, "status": "failed"}
+
+
+SCAN_JOB_PROJECTION = (
+    "job { .id, .repository_name, .status, .scanners, .requested_at, .requested_by }"
+)
+
+SCAN_JOB_STATE = """
+MATCH (repo:Repository {owner: $owner, name: $name})
+OPTIONAL MATCH (repo)-[:HAS_JOB]->(done:ScanJob {owner: $owner, status: 'done'})
+RETURN coalesce(repo.access_revoked, false) AS revoked, max(done.requested_at) AS last_done
+"""
+
+QUEUE_SCAN_JOB = f"""
+MATCH (repo:Repository {{owner: $owner, name: $name}})
+CREATE (repo)-[:HAS_JOB]->(job:ScanJob {{
+  id: $id, owner: $owner, repository_name: repo.name, active_repository: repo.name,
+  status: 'queued', scanners: $scanners, requested_at: $now, requested_by: $owner
+}})
+SET repo.last_scan_requested_at = $now
+RETURN {SCAN_JOB_PROJECTION} AS job
+"""
+
+
+@app.post("/scans/run", status_code=201)
+def queue_scan(body: ScanRunIn, current_user: CurrentUser):
+    owner = current_user["id"]
+    with get_driver().session() as session:
+        state = session.run(SCAN_JOB_STATE, owner=owner, name=body.repository).single()
+    if state is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if state["revoked"]:
+        raise HTTPException(status_code=409, detail="Repository access was revoked on GitHub")
+    if state["last_done"]:
+        next_allowed = datetime.fromisoformat(state["last_done"]) + timedelta(days=SCAN_COOLDOWN_DAYS)
+        wait = next_allowed - datetime.now(timezone.utc)
+        if wait.total_seconds() > 0:
+            raise HTTPException(
+                status_code=429,
+                detail={"message": "Repository was scanned recently", "next_allowed_at": next_allowed.isoformat()},
+                headers={"Retry-After": str(int(wait.total_seconds()) + 1)},
+            )
+    try:
+        with get_driver().session() as session:
+            record = session.execute_write(
+                lambda tx: tx.run(
+                    QUEUE_SCAN_JOB,
+                    owner=owner,
+                    name=body.repository,
+                    id=uuid4().hex,
+                    scanners=body.scanners,
+                    now=_now(),
+                ).single()
+            )
+    except ConstraintError:
+        raise HTTPException(status_code=409, detail="A scan is already queued for this repository")
+    if record is None:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return {"job": record["job"]}
 
 
 @app.get("/scans/failing", dependencies=signed_in)

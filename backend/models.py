@@ -210,6 +210,23 @@ class GitHubRepositoryIn(BaseModel):
     full_name: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", max_length=200)
 
 
+class ScanRunIn(BaseModel):
+    repository: str
+    scanners: list[Literal["trivy", "semgrep"]] = Field(
+        default_factory=lambda: ["trivy", "semgrep"], min_length=1
+    )
+
+    @field_validator("repository")
+    @classmethod
+    def normalize_repository(cls, v: str) -> str:
+        return _normalize_key(v).lower()
+
+    @field_validator("scanners")
+    @classmethod
+    def dedupe_scanners(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(v))
+
+
 class ScanFailureIn(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None
