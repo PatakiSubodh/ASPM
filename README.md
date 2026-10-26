@@ -247,6 +247,7 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `GET` | `/graph` | Graph as `{nodes, links}`; `?status=` like `/findings`; the same `?severity=`, `?priority=`, `?environment=`, `?internet_facing=`, `?scanner=`, `?repo=` filters, which keep only matching vulnerabilities and the repositories and assets they connect to |
 | `GET` | `/scans` | Scan runs, newest first, with `status` (`succeeded` / `failed`); `?repo=`, `?limit=` |
 | `GET` | `/scans/failing` | Repositories whose latest scan (per scanner) failed, with reason and last successful scan time |
+| `POST` | `/scans/run` | "Scan now" (signed-in): queue a scan job `{repository, scanners?}` (`trivy`, `semgrep`; default both); 404 unknown repository, 409 access revoked or a job already open, 429 with `next_allowed_at` within `SCAN_COOLDOWN_DAYS` (default 7) of the last successful scan |
 | `POST` | `/scans/failed` | Record a failed scan run (`repo_name`, `scanner`, `error`, optional `repo_url`, `commit`, `detail`); never resolves anything |
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
 | `POST` | `/ingest/semgrep` | Ingest a Semgrep JSON report the same way (SAST findings) |
