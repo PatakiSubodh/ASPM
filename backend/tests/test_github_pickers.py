@@ -81,6 +81,45 @@ def test_branches_reject_ungranted_and_malformed(client, monkeypatch, installati
     assert client.get("/github/branches", params={"repo": "a/b/c"}).status_code == 422
 
 
+def test_revoked_repository_cannot_be_added_or_branched(client, monkeypatch, installation):
+    create, _ = installation
+    create("all")
+    granted(monkeypatch, [item(1, "api"), item(2, "drop")])
+    client.post("/github/repositories/refresh")
+    granted(monkeypatch, [item(1, "api")])
+    client.post("/github/repositories/refresh")
+    monkeypatch.setattr(github, "list_branches", lambda token, full_name: ["main"])
+
+    added = client.post("/github/repositories", json={"full_name": f"{PREFIX}/drop"})
+    branches = client.get("/github/branches", params={"repo": f"{PREFIX}/drop"})
+    available = client.get("/github/available-repositories").json()["repositories"]
+
+    assert added.status_code == 404
+    assert branches.status_code == 404
+    assert available == []
+    assert stored("drop")["access_revoked"] is True
+    assert stored("drop")["selected"] is False
+
+
+def test_paused_installation_grants_nothing(client, monkeypatch, installation):
+    create, created = installation
+    create("all")
+    with main.get_driver().session() as session:
+        session.run(
+            "MATCH (i:GitHubInstallation {id: $id}) SET i.status = 'disconnected'",
+            id=created["id"],
+        ).consume()
+
+    def fail(*args, **kwargs):
+        raise AssertionError("GitHub must not be called")
+
+    monkeypatch.setattr(github, "installation_token", fail)
+
+    assert client.get("/github/available-repositories").json() == {"repositories": []}
+    assert client.get("/github/branches", params={"repo": f"{PREFIX}/api"}).status_code == 404
+    assert client.post("/github/repositories", json={"full_name": f"{PREFIX}/api"}).status_code == 404
+
+
 def test_list_branches_pages_and_caps(monkeypatch):
     pages = []
 
