@@ -248,6 +248,8 @@ Each Trivy post is one scan run. New findings start `open`; findings the run no 
 | `GET` | `/scans` | Scan runs, newest first, with `status` (`succeeded` / `failed`); `?repo=`, `?limit=` |
 | `GET` | `/scans/failing` | Repositories whose latest scan (per scanner) failed, with reason and last successful scan time |
 | `POST` | `/scans/run` | "Scan now" (signed-in): queue a scan job `{repository, scanners?}` (`trivy`, `semgrep`; default both); 404 unknown repository, 409 access revoked or a job already open, 429 with `next_allowed_at` within `SCAN_COOLDOWN_DAYS` (default 7) of the last successful scan |
+| `POST` | `/jobs/claim` | Worker (`X-API-Key`): claim the oldest queued or lease-expired scan job; returns `{job, owner, claim_id, lease_expires_at, repository, token, token_expires_at}` (token is a repository-scoped GitHub installation token, `null` for manual repositories) or `{job: null}`; 502 puts the job back when GitHub fails |
+| `POST` | `/jobs/{id}/complete` | Worker (`X-API-Key`): close a claimed job `{claim_id, status: done\|failed, scan_ids?, error?}`; 409 if `claim_id` is not the current claim, 404 unknown job |
 | `POST` | `/scans/failed` | Record a failed scan run (`repo_name`, `scanner`, `error`, optional `repo_url`, `commit`, `detail`); never resolves anything |
 | `POST` | `/ingest/trivy` | Ingest a Trivy JSON report as one scan run with auto-resolve; `?commit=`, `?partial=`; asset params optional |
 | `POST` | `/ingest/semgrep` | Ingest a Semgrep JSON report the same way (SAST findings) |
