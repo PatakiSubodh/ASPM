@@ -1404,8 +1404,7 @@ SCHEDULE_CANDIDATES = """
 MATCH (repo:Repository)
 WHERE ($owner IS NULL OR repo.owner = $owner)
   AND coalesce(repo.selected, true) AND NOT coalesce(repo.access_revoked, false)
-OPTIONAL MATCH (repo)-[:HAS_JOB]->(job:ScanJob)
-WITH repo, collect(job) AS jobs
+WITH repo, [(repo)-[:HAS_JOB]->(job:ScanJob) | job] AS jobs
 WHERE none(j IN jobs WHERE j.status IN ['queued', 'claimed'])
   AND ((size(jobs) = 0 AND repo.last_scanned_at IS NULL) OR repo.schedule_weekday IS NOT NULL)
 RETURN repo.owner AS owner, repo.name AS name,
